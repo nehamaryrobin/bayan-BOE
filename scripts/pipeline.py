@@ -12,7 +12,7 @@ import os
 from app.logger import get_logger
 from extractors.pdf_to_text import extract_pages
 from extractors.header_extractor import extract_header
-from extractors.line_item_extractor import extract_line_items
+from extractors.line_item_extractor import extract_tabular_groups
 from db.connection import get_connection
 from db.inserter import insert_boe, is_duplicate
 from utils.file_utils import move_to_processed, move_to_failed
@@ -40,7 +40,7 @@ def process_file(pdf_path: str) -> bool:
         dec_no = header["DEC_NO"]
 
         # ── Step 3: Parse line items ──────────────────────────────────────────
-        line_items = extract_line_items(pages, filename, dec_no)
+        line_items = extract_tabular_groups(pdf_path, filename, dec_no)
 
         # ── Step 4: Duplicate check ───────────────────────────────────────────
         conn = get_connection()

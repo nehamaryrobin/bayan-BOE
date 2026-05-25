@@ -5,9 +5,6 @@ No database connection required.
 
 Usage:
     python test_extraction.py <path_to_pdf>
-
-Example:
-    python test_extraction.py data/input/BOE_MAIR.pdf
 """
 import sys
 import os
@@ -18,7 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from extractors.pdf_to_text import extract_pages
 from extractors.header_extractor import extract_header
-from extractors.line_item_extractor import extract_line_items
+# CHANGE 1: Import the new coordinate-based tabular group extractor
+from extractors.line_item_extractor import extract_tabular_groups
 
 
 def print_section(title: str) -> None:
@@ -54,7 +52,6 @@ def main():
         for i, page in enumerate(pages, 1):
             print(f"  Page {i}      : {len(page)} characters extracted")
 
-        # Print raw text of each page for inspection
         for i, page in enumerate(pages, 1):
             print(f"\n--- RAW TEXT: PAGE {i} ---")
             print(page)
@@ -63,6 +60,9 @@ def main():
     except Exception as e:
         print(f"  FAILED: {e}")
         sys.exit(1)
+
+    full_text = "\n".join(pages)
+    diagnose(full_text)
 
     # ── Step 2: Header extraction ─────────────────────────────────────────────
     print_section("STEP 2: HEADER FIELDS")
@@ -86,10 +86,12 @@ def main():
         sys.exit(1)
 
     # ── Step 3: Line item extraction ──────────────────────────────────────────
-    print_section("STEP 3: LINE ITEMS")
+    print_section("STEP 3: LINE ITEMS (TABULAR GROUPING)")
     try:
         dec_no = header["DEC_NO"]
-        line_items = extract_line_items(pages, filename, dec_no)
+        
+        # CHANGE 2: Call the geometric extractor using pdf_path instead of parsed text pages
+        line_items = extract_tabular_groups(pdf_path, filename, dec_no)
         print(f"  Items found: {len(line_items)}\n")
 
         for item in line_items:
@@ -112,6 +114,13 @@ def main():
     print(f"  DEC_NO    : {header.get('DEC_NO')}")
     print(f"  Items     : {len(line_items)}")
     print(f"  Status    : Ready for DB insert\n")
+
+
+def diagnose(text: str) -> None:
+    print("\n=== DIAGNOSTIC: LINE BY LINE ===")
+    for i, line in enumerate(text.split('\n'), 1):
+        if line.strip():
+            print(f"{i:3}: {repr(line)}")
 
 
 if __name__ == "__main__":
