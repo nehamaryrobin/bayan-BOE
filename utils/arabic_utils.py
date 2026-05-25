@@ -2,29 +2,18 @@ import re
 import arabic_reshaper
 from bidi.algorithm import get_display
 
+# Covers standard Arabic (U+0600-06FF) AND Presentation Forms-B (U+FE70-FEFF)
+_AR_RE = re.compile(r'[\u0600-\u06FF\uFE70-\uFEFF]')
+
 
 def fix_arabic(text: str) -> str:
-    """
-    Reshape and reorder Arabic text extracted from PDF (which is often
-    stored in visual/RTL order) into proper logical Unicode order for DB storage.
-    Returns the original text unchanged if it contains no Arabic characters.
-    """
-    if not text or not _has_arabic(text):
+    if not text or not _AR_RE.search(text):
         return text
     reshaped = arabic_reshaper.reshape(text)
-    return get_display(reshaped)
-
-
-def _has_arabic(text: str) -> bool:
-    """Return True if text contains any Arabic Unicode characters."""
-    return bool(re.search(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]+', text))
+    return get_display(reshaped) or text
 
 
 def clean(value) -> str | None:
-    """
-    Strip whitespace from a value. Return None if empty after stripping.
-    Applies Arabic fix if Arabic characters are detected.
-    """
     if value is None:
         return None
     text = str(value).strip()
@@ -34,10 +23,6 @@ def clean(value) -> str | None:
 
 
 def clean_number(value) -> float | None:
-    """
-    Parse a numeric string (may contain commas) to float.
-    Returns None if empty or unparseable.
-    """
     if value is None:
         return None
     text = str(value).strip().replace(",", "")

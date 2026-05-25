@@ -1,30 +1,15 @@
 """
 line_item_extractor.py
-Extracts BOE line items as a coherent tabular group using coordinate boundary mapping.
-Uses horizontal visual row grouping, then cleanly processes row text via regex anchors
-to bypass column bleeding and handle dynamic page distributions.
+Semantic Anchor & Sequence Parser for Saudi BOE Layouts.
+Uses strict baseline anchoring to prevent header-chaining, then plucks
+explicitly typed data from the cleanly isolated row strings.
 """
+import re
 from app.logger import get_logger
 from utils.arabic_utils import clean, clean_number
 from extractors.pdf_to_text import extract_words_with_coords
-import re
 
 logger = get_logger("line_item_extractor")
-
-# Map of column field numbers to their corresponding data dictionary keys
-FIELD_MAPPING = {
-    22: "HS_CODE_22",
-    23: "GOODS_DESCRIPTION_23",
-    24: "ORIGIN_24",
-    25: "FOREIGN_VALUE_25",
-    26: "CURRENCY_TYPE_26",
-    27: "CURRENCY_VALUE_27",
-    28: "CIF_LOCAL_VALUE_28",
-    29: "D_RATE_29",
-    30: "INCOME_TYPE_30",
-    31: "TOTAL_DUTY_31",
-}
-
 
 def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[dict]:
     pages_words = extract_words_with_coords(pdf_path)
@@ -34,13 +19,14 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
         if not words:
             continue
 
-        # 1. Cluster words into clean visual horizontal rows based on vertical 'top' coordinates
+        # ── 1. Create Clean Horizontal Text Strings (STRICT BASELINE) ──
         sorted_words = sorted(words, key=lambda w: w["top"])
         row_groups = []
         if sorted_words:
             current_row = [sorted_words[0]]
             for w in sorted_words[1:]:
-                if abs(w["top"] - current_row[-1]["top"]) <= 6:
+                # BUG FIX: Compare against current_row[0] to prevent "staircase" merging
+                if abs(w["top"] - current_row[0]["top"]) <= 6:
                     current_row.append(w)
                 else:
                     row_groups.append(current_row)
@@ -48,129 +34,143 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
             if current_row:
                 row_groups.append(current_row)
 
-        # 2. Parse the lines cleanly via anchor segmentations
+        # ── 2. Classify and Extract ──
         for row in row_groups:
-            row_str = " ".join([w["text"] for w in sorted(row, key=lambda w: w["x0"])])
-            tokens = row_str.strip().split()
-
-            # ── A. Parse Package Grid Rows ──
-            # Look at the sequence of the last 4 to 5 tokens, ignoring any header garbage at the front.
-            # Sequence: ... [Gross] [Net] [Unit] [Qty] [ItemNo]
-            if len(tokens) >= 4:
-                item_no_str = tokens[-1]
-                qty_str = tokens[-2]
-                net_str = tokens[-4]
-
-                # Verify it fits the strict package signature: ends in an item number (<40 to block phantom row 48)
-                if item_no_str.isdigit() and int(item_no_str) < 40:
-                    # Verify the weight/qty positions are actually numbers
-                    if re.match(r'^[\d.,]+$', qty_str) and re.match(r'^[\d.,]+$', net_str):
-                        item_no = int(item_no_str)
-                        unit_str = tokens[-3]
-                        gross_str = tokens[-5] if len(tokens) >= 5 else net_str
-
-                        if item_no not in all_final_items:
-                            all_final_items[item_no] = _create_empty_item(item_no, dec_no, filename)
-
-                        all_final_items[item_no].update({
-                            "GROSS_WEIGHT_37": clean_number(gross_str),
-                            "NET_WEIGHT_36":   clean_number(net_str),
-                            "ITEM_UNIT_35":    clean(unit_str),
-                            "ITEM_QTY_34":     clean_number(qty_str),
-                            "PKG_QTY_32":      1.0,
-                        })
-                        continue
-
-            # ── B. Parse Main Value Rows ──
-            # Drop the '$' anchor so trailing margin junk doesn't break the regex
-            value_match = re.search(r'\b(\d{10,12})\s+(\d{1,2})\b', row_str)
-            if value_match:
-                item_no = int(value_match.group(2))
-                hs_code = value_match.group(1)
+            row_str = " ".join([w["text"] for w in sorted(row, key=lambda w: w["x0"])]).strip()
+            
+            # --- PATH A: MAIN ITEM ROW ---
+            hs_match = re.search(r'\b(\d{10,12})\b', row_str)
+            
+            if hs_match:
+                hs_code = hs_match.group(1)
+                item_match = re.search(r'\b(\d{1,2})\s*$', row_str)
+                if not item_match:
+                    continue 
+                    
+                item_no = int(item_match.group(1))
                 
-                # Block phantom items captured by rogue numbers
-                if item_no >= 40:
-                    continue
-
-                # Slice the string BEFORE the HS code. This entirely cuts off any margin garbage.
-                body_str = row_str[:value_match.start()].strip()
-                
-                parsed_values = _parse_value_row_string(body_str, hs_code)
-
                 if item_no not in all_final_items:
                     all_final_items[item_no] = _create_empty_item(item_no, dec_no, filename)
+                
+                parsed_main = _parse_main_sequence(row_str, hs_code, item_no)
+                all_final_items[item_no].update(parsed_main)
+                continue
 
-                all_final_items[item_no].update(parsed_values)
+            # --- PATH B: PACKAGE ITEM ROW ---
+            # Trigger: Ends in 1-2 digits, contains decimals, and is not a main line
+            if not hs_match and re.search(r'\b\d{1,2}\s*$', row_str):
+                # Ensure it has the visual signature of a package line (multiple float numbers)
+                float_count = len(re.findall(r'\b\d+\.\d+\b', row_str))
+                if float_count >= 2:
+                    item_match = re.search(r'\b(\d{1,2})\s*$', row_str)
+                    if item_match:
+                        item_no = int(item_match.group(1))
+                        
+                        if item_no not in all_final_items:
+                            all_final_items[item_no] = _create_empty_item(item_no, dec_no, filename)
+                            
+                        parsed_pkg = _parse_package_sequence(row_str, item_no)
+                        all_final_items[item_no].update(parsed_pkg)
 
     return sorted(all_final_items.values(), key=lambda x: x["ITEM_NO"])
 
 
-def _parse_value_row_string(body: str, hs_code: str) -> dict:
-    """Parses isolated row body strings using exact token sequence matching."""
-    item_data = {}
-
-    # 1. Currency Type
-    curr_m = re.search(r'\b(SAR|USD|EUR|AED)\b', body)
-    currency_type = curr_m.group(1) if curr_m else None
-    item_data["CURRENCY_TYPE_26"] = currency_type
-
-    # 2. Origin Country
-    origin_m = re.search(r'\b([A-Z]{2})\b', body)
-    item_data["ORIGIN_24"] = origin_m.group(1) if (origin_m and origin_m.group(1) not in {"SAR", "USD", "EUR", "AED"}) else None
-
-    # 3. Income Classification Type
-    if "معفي" in body or "ﻲﻔﻌﻣ" in body:
-        item_data["INCOME_TYPE_30"] = "معفي ت"
-    else:
-        item_data["INCOME_TYPE_30"] = "قطعي"
-
-    # 4. Duty Tax Rate Percentage
-    rate_m = re.search(r'%\s*(\d+)', body)
-    item_data["D_RATE_29"] = float(rate_m.group(1)) / 100 if rate_m else 0.0
-
-    # 5. Financial Matrices
-    num_segment = body.split(currency_type)[0] if currency_type else body
-    nums = [clean_number(n) for n in re.findall(r'[\d,]+\.?\d*', num_segment) if clean_number(n) is not None]
-
-    if len(nums) >= 3:
-        item_data["TOTAL_DUTY_31"]      = nums[0]
-        item_data["CIF_LOCAL_VALUE_28"] = nums[1]
-        item_data["CURRENCY_VALUE_27"]  = nums[2]
-        item_data["FOREIGN_VALUE_25"]   = nums[1] if len(nums) == 3 else nums[3]
-    else:
-        item_data["TOTAL_DUTY_31"]      = nums[0] if len(nums) > 0 else 0.0
-        item_data["CIF_LOCAL_VALUE_28"] = nums[1] if len(nums) > 1 else None
-        item_data["CURRENCY_VALUE_27"]  = 1.0
-        item_data["FOREIGN_VALUE_25"]   = nums[1] if len(nums) > 1 else None
-
-    # 6. Goods Description
-    arabic_blocks = re.findall(r'[\u0600-\u06FF][^\d\n]{2,}', body)
-    item_data["GOODS_DESCRIPTION_23"] = clean(" ".join(arabic_blocks)) if arabic_blocks else None
+def _parse_main_sequence(row_str: str, hs_code: str, item_no: int) -> dict:
+    data: dict = {"HS_CODE_22": hs_code}
     
-    item_data["HS_CODE_22"] = hs_code
+    # 1. Clean the string
+    body = re.sub(r'\b' + re.escape(hs_code) + r'\b', ' ', row_str)
+    body = re.sub(r'\b' + str(item_no) + r'\s*$', ' ', body)
+    
+    # 2. Pluck Tax Rate
+    rate_m = re.search(r'%\s*(\d+)', body)
+    data["D_RATE_29"] = float(rate_m.group(1)) / 100 if rate_m else 0.0
+    if rate_m:
+        body = body.replace(rate_m.group(0), ' ')
 
-    return item_data
+    # 3. Pluck Currency
+    curr_m = re.search(r'\b(SAR|USD|EUR|AED)\b', body)
+    data["CURRENCY_TYPE_26"] = curr_m.group(1) if curr_m else None
+    if curr_m:
+        body = body.replace(curr_m.group(0), ' ')
+
+    # 4. Pluck Origin (2 Letters)
+    origin_m = re.search(r'\b([A-Z]{2})\b', body)
+    data["ORIGIN_24"] = origin_m.group(1) if origin_m else None
+    if origin_m:
+        body = body.replace(origin_m.group(0), ' ')
+
+    # 5. Pluck Income Type
+    if "معفي" in body or "ﻲﻔﻌﻣ" in body:
+        data["INCOME_TYPE_30"] = "معفي ت"
+        body = re.sub(r'(معفي|ت|ﻲﻔﻌﻣ)', ' ', body)
+    else:
+        data["INCOME_TYPE_30"] = "قطعي"
+        body = re.sub(r'(قطعي|ﻲﻌﻄﻗ)', ' ', body)
+
+    # 6. Extract Arabic Description
+    arabic_blocks = re.findall(r'[\u0600-\u06FF][^\d\n]{2,}', body)
+    data["GOODS_DESCRIPTION_23"] = clean(" ".join(arabic_blocks)) if arabic_blocks else None
+
+    # 7. Extract Financial Sequences
+    nums = [clean_number(n) for n in re.findall(r'[\d,]+\.?\d*', body) if clean_number(n) is not None]
+    
+    if len(nums) >= 4:
+        data["TOTAL_DUTY_31"]      = nums[0]
+        data["CIF_LOCAL_VALUE_28"] = nums[1]
+        data["CURRENCY_VALUE_27"]  = nums[2]
+        data["FOREIGN_VALUE_25"]   = nums[3]
+    elif len(nums) == 3:
+        data["TOTAL_DUTY_31"]      = 0.0
+        data["CIF_LOCAL_VALUE_28"] = nums[0]
+        data["CURRENCY_VALUE_27"]  = nums[1]
+        data["FOREIGN_VALUE_25"]   = nums[2]
+    else:
+        data["TOTAL_DUTY_31"]      = nums[0] if len(nums) > 0 else 0.0
+        data["CIF_LOCAL_VALUE_28"] = nums[1] if len(nums) > 1 else None
+        data["CURRENCY_VALUE_27"]  = 1.0
+        data["FOREIGN_VALUE_25"]   = nums[1] if len(nums) > 1 else None
+
+    return data
+
+
+def _parse_package_sequence(row_str: str, item_no: int) -> dict:
+    data: dict = {"PKG_QTY_32": 1.0}
+    
+    # Remove the trailing item number 
+    body = re.sub(r'\b' + str(item_no) + r'\s*$', ' ', row_str)
+    
+    # 1. Extract Unit Name (Greedy match to fix fractured Arabic spacing like ﻭﺣﺪ ﺓ)
+    # Replaces spacing inside Arabic words to heal the token
+    arabic_only = "".join(re.findall(r'[\u0600-\u06FF]+', body))
+    data["ITEM_UNIT_35"] = clean(arabic_only) if arabic_only else "وحدة"
+    
+    # 2. Extract Numbers
+    nums = [clean_number(n) for n in re.findall(r'[\d,]+\.?\d*', body) if clean_number(n) is not None]
+    
+    if len(nums) >= 3:
+        data["GROSS_WEIGHT_37"] = nums[0]
+        data["NET_WEIGHT_36"]   = nums[1]
+        data["ITEM_QTY_34"]     = nums[2]
+    elif len(nums) == 2:
+        data["GROSS_WEIGHT_37"] = nums[0]
+        data["NET_WEIGHT_36"]   = nums[0]
+        data["ITEM_QTY_34"]     = nums[1]
+    else:
+        data["GROSS_WEIGHT_37"] = nums[0] if len(nums) > 0 else None
+        data["NET_WEIGHT_36"]   = nums[0] if len(nums) > 0 else None
+        data["ITEM_QTY_34"]     = 1.0
+        
+    return data
 
 
 def _create_empty_item(item_no: int, dec_no: str, filename: str) -> dict:
-    """Initializes schema item dictionary with strict key continuity."""
     return {
-        "ITEM_NO": item_no,
-        "DEC_NO": dec_no,
-        "PDF_FILENAME": filename,
-        "HS_CODE_22": None,
-        "GOODS_DESCRIPTION_23": None,
-        "ORIGIN_24": None,
-        "FOREIGN_VALUE_25": None,
-        "CURRENCY_TYPE_26": None,
-        "CURRENCY_VALUE_27": None,
-        "CIF_LOCAL_VALUE_28": None,
-        "D_RATE_29": None,
-        "INCOME_TYPE_30": None,
-        "TOTAL_DUTY_31": None,
-        "GROSS_WEIGHT_37": None,
-        "NET_WEIGHT_36": None,
-        "ITEM_UNIT_35": None,
-        "ITEM_QTY_34": None,
-        "PKG_QTY_32": None,
+        "ITEM_NO": item_no, "DEC_NO": dec_no, "PDF_FILENAME": filename,
+        "HS_CODE_22": None, "GOODS_DESCRIPTION_23": None, "ORIGIN_24": None,
+        "FOREIGN_VALUE_25": None, "CURRENCY_TYPE_26": None, "CURRENCY_VALUE_27": None,
+        "CIF_LOCAL_VALUE_28": None, "D_RATE_29": None, "INCOME_TYPE_30": None, "TOTAL_DUTY_31": None,
+        "GROSS_WEIGHT_37": None, "NET_WEIGHT_36": None, "ITEM_UNIT_35": None, "ITEM_QTY_34": None, "PKG_QTY_32": None,
+        "PKG_TYPE_33": None, "AIP_NO_37A": None, "AIP_DUTY_37B": None, "CUSTOMS_RESTRICTIONS_AGENCY_40": None,
+        "CUSTOMS_RELEASE_REF_41": None, "EXEMPTION_OF_DUTY_CODE": None
     }
