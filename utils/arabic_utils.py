@@ -10,7 +10,7 @@ def fix_arabic(text: str) -> str:
     if not text or not _AR_RE.search(text):
         return text
     reshaped = arabic_reshaper.reshape(text)
-    return get_display(reshaped) or text
+    return str(get_display(reshaped)) #explicit converted to str for type consistency
 
 
 def clean(value) -> str | None:

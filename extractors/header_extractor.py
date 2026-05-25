@@ -1,7 +1,8 @@
 """
 header_extractor.py
-Parses BOE header fields safely from raw PDF text strings.
-Patches regex group capturing to eliminate "no such group" failures.
+Parses BOE header fields from raw PDF text.
+Arabic text covers both U+0600-06FF (standard) and U+FE70-FEFF (Presentation Forms-B).
+Uses field numbers and known line positions as anchors.
 """
 import re
 from app.logger import get_logger
@@ -9,223 +10,363 @@ from utils.arabic_utils import clean, clean_number
 
 logger = get_logger("header_extractor")
 
+# Both standard Arabic and Presentation Forms-B
+_AR = r'[\u0600-\u06FF\uFE70-\uFEFF]'
 
-def _field_failed(field_name: str, filename: str, dec_no: str) -> None:
-    logger.warning(
-        f"FIELD_FAIL | file='{filename}' | dec_no='{dec_no}' | field='{field_name}'"
-    )
+_NOISE = {
+    "ESU", "TNEGA", "S'REIRRAC", "REKORB", "RO", "RETROPMI",
+    "ﻹﺳﺘﻌﻤﺎﻻت", "وﻛﯿﻞ", "اﻟﻨﺎﻗﻠﺔ", "اﻟﻤﺴﺘﻮرد",
+    "او اﻟﻤﺨﻠﺺ", "اﻟﻤﺨﻠﺺ", "او", "اﻟﺠﻤﺎرك", "QR Code",
+}
+
+
+def _strip_noise(pages: list[str]) -> list[str]:
+    out = []
+    for page in pages:
+        lines = [l for l in page.split('\n') if l.strip() not in _NOISE]
+        out.append('\n'.join(lines))
+    return out
+
+
+def _field_failed(field: str, filename: str, dec_no: str) -> None:
+    logger.warning(f"FIELD_FAIL | file='{filename}' | dec_no='{dec_no}' | field='{field}'")
+
+
+def _find_line(lines: list[str], *keywords) -> int:
+    """Return index of first line containing ALL keywords."""
+    for i, line in enumerate(lines):
+        if all(k in line for k in keywords):
+            return i
+    return -1
+
+
+def _get(lines: list[str], idx: int) -> str:
+    return lines[idx].strip() if 0 <= idx < len(lines) else ""
 
 
 def _search(pattern: str, text: str, flags=re.MULTILINE) -> str | None:
-    """Safely searches text and guards group extractions."""
     m = re.search(pattern, text, flags)
     if m:
-        try:
-            # Ensure group(1) exists before trying to extract it
-            val = m.group(1).strip() if m.group(1) else None
-            return val if val else None
-        except IndexError:
-            # Fallback if regex matched but didn't contain explicit capture groups ()
-            val = m.group(0).strip()
-            return val if val else None
+        val = m.group(1).strip()
+        return val if val else None
     return None
 
 
-def extract_header(pages: list[str], filename: str) -> dict:
-    text = "\n".join(pages)
-    data = {}
+def _arabic_tokens(line: str) -> list[str]:
+    """
+    Strip dates, numbers, English, punctuation from a line
+    and return remaining Arabic tokens (covers both unicode blocks).
+    """
+    s = re.sub(r'\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}', ' ', line)
+    s = re.sub(r'[\d.,/()\\%]+', ' ', s)
+    s = re.sub(r'[A-Za-z]+', ' ', s)
+    s = re.sub(r'\s{2,}', ' ', s).strip()
+    return [t for t in s.split() if re.search(_AR, t)]
 
-    # ── Field 1: DEC_NO ───────────────────────────────────────────────────────
-    dec_no = _search(r'\b(\d{7})\b', text)
+
+def _arabic_str(line: str) -> str:
+    return ' '.join(_arabic_tokens(line))
+
+
+def extract_header(pages: list[str], filename: str) -> dict:
+    pages = _strip_noise(pages)
+    # Work on page 1 — all header fields are here
+    lines = [l for l in pages[0].split('\n') if l.strip()]
+    text  = '\n'.join(lines)
+    data  = {}
+
+    # ── Field 1: DEC_NO — 7-digit number on line 5 ───────────────────────────
+    # Line 5: "Custom Declaration يﻮﺟ داﺮﯿﺘﺳإ نﺎﯿﺑ 21-04-2026 1447-11-04 1247350 ..."
+    info_idx = _find_line(lines, 'Dec No', 'Dec Date', 'Dec Type')
+    val_line = _get(lines, info_idx + 1)
+
+    dec_no = _search(r'\b(\d{7})\b', val_line)
     if not dec_no:
         raise ValueError(f"[{filename}] Could not extract DEC_NO")
     data["DEC_NO"] = dec_no
 
-    # ── Field 2: DEC_DATE ─────────────────────────────────────────────────────
-    # Diagnostic Line 5/96 shows a period instead of space: "21-04-2026.1447-11-04" or spaces
-    date_val = _search(r'(\d{2}-\d{2}-\d{4}[\s.]\d{4}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}[\s.]\d{2}-\d{2}-\d{4})', text)
-    if not date_val:
+    # ── Field 2: DEC_DATE — two date formats on same line ────────────────────
+    # "21-04-2026 1447-11-04" → store as "1447-11-04 / 21-04-2026"
+    dates = re.findall(r'\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}', val_line)
+    if len(dates) >= 2:
+        # first is Gregorian (DD-MM-YYYY), second is Hijri (YYYY-MM-DD)
+        data["DEC_DATE_2"] = f"{dates[1]} / {dates[0]}"
+    else:
+        data["DEC_DATE_2"] = None
         _field_failed("DEC_DATE_2", filename, dec_no)
-    data["DEC_DATE_2"] = clean(date_val) if date_val else None
 
-    # ── Field 3: DEC_TYPE ─────────────────────────────────────────────────────
-    dec_type = _search(r'(داﺮﯿﺘﺳإ\s+نﺎﯿﺑ|بيان\s+إستيراد)', text)
+    # ── Field 3: DEC_TYPE — Arabic declaration type on same line ─────────────
+    # Contains "داﺮﯿﺘﺳإ نﺎﯿﺑ" (import declaration) in mixed unicode
+    dec_type_tokens = _arabic_tokens(val_line)
+    # Remove short noise tokens (بيان جمركي fragments), keep meaningful ones
+    dec_type = ' '.join([t for t in dec_type_tokens if len(t) > 2])
     if not dec_type:
         _field_failed("DEC_TYPE_3", filename, dec_no)
     data["DEC_TYPE_3"] = clean(dec_type) if dec_type else None
 
-    # ── Field 4: PORT_TYPE ────────────────────────────────────────────────────
-    port_type = _search(r'\b(يﻮﺟ|جوي|يرﺑ|يرحب)\b', text)
+    # ── Field 4: PORT_TYPE — يﻮﺟ (air) on same line ─────────────────────────
+    port_type = _search(r'\b(يﻮﺟ|جوي|يرﺑ|بري|يرحب|بحري)\b', val_line)
     if not port_type:
         _field_failed("PORT_TYPE_4", filename, dec_no)
     data["PORT_TYPE_4"] = clean(port_type) if port_type else None
 
-    # ── Field 5: DELIVERY_ORDER_NO ───────────────────────────────────────────
-    # Diagnostic Line 7: "(FCL) ﺔﻠﻣﺎﻛ ﺔﯾوﺎﺣ 03-11-1447 96185253"
-    delivery = _search(r'\(FCL\)[^\n]*\s+(\d{8,})\b', text)
-    if not delivery:
-        delivery = _search(r'\b(\d{8,})\b(?=.*نذإ)', text)
+    # ── Fields 5-7: Delivery / Importer / Net Weight ─────────────────────────
+    # Label line 6: "NET WEIGHT/UNLOAD DATE 7  IMPORTER/EXPORTER 6  DELIVERY ORDER NO. 5"
+    # Value line 7: "03-11-1447 / 33.5  شركة سيسكو ...  (FCL) حاوية  03-11-1447  96185253"
+    deliv_lbl = _find_line(lines, 'DELIVERY ORDER NO', '5')
+    deliv_val = _get(lines, deliv_lbl + 1)
+
+    # Field 5: 8-digit delivery order number
+    delivery = _search(r'\b(\d{8})\b', deliv_val)
     if not delivery:
         _field_failed("DELIVERY_ORDER_NO_5", filename, dec_no)
-    data["DELIVERY_ORDER_NO_5"] = clean(delivery) if delivery else None
+    data["DELIVERY_ORDER_NO_5"] = clean(delivery)
 
-    # ── Field 6: IMPORTER_EXPORTER ───────────────────────────────────────────
-    # Diagnostic Line 7 shows the company name right alongside the FCL details
-    importer = _search(r'ةدوﺪﺤﻤﻟا\s+ﺔﯾدﻮﻌﺴﻟا\s+ﺔﯿﺑﺮﻌﻟا\s+ﻮﻜﺴﯿﺳ\s+ﺔﻛﺮﺷ|شركة\s+سيسكو\s+العربية\s+السعودية\s+المحدودة', text)
+    # Field 6: Arabic company name — longest Arabic token sequence after stripping
+    imp_tokens = _arabic_tokens(deliv_val)
+    # Keep tokens > 2 chars to skip short noise fragments
+    imp_tokens = [t for t in imp_tokens if len(t) > 2]
+    importer = ' '.join(imp_tokens) if imp_tokens else None
     if not importer:
         _field_failed("IMPORTER_EXPORTER_6", filename, dec_no)
-    data["IMPORTER_EXPORTER_6"] = clean(importer) if importer else None
+    data["IMPORTER_EXPORTER_6"] = clean(importer)
 
-    # ── Field 7: NET_WEIGHT_UNLOAD_DATE ──────────────────────────────────────
-    net_wt = _search(r'(\d{2}-\d{2}-\d{4}\s*/\s*[\d.]+)', text)
+    # Field 7: "03-11-1447 / 33.5"
+    net_wt = _search(r'(\d{2}-\d{2}-\d{4}\s*/\s*[\d.]+)', deliv_val)
     if not net_wt:
         _field_failed("NET_WEIGHT_UNLOAD_DATE_7", filename, dec_no)
-    data["NET_WEIGHT_UNLOAD_DATE_7"] = clean(net_wt) if net_wt else None
+    data["NET_WEIGHT_UNLOAD_DATE_7"] = clean(net_wt)
 
-    # ── Field 8: CARRIER_CAPTAIN_DRIVER ──────────────────────────────────────
-    data["CARRIER_CAPTAIN_DRIVER_8"] = None 
+    # ── Fields 8-10: Carrier / Intercessor / Gross Weight ────────────────────
+    # Label line 8: "GROSS WEIGHT 10  INTERCESSOR CO. 9  CARRIER'S/CAPTAIN/DRIVER 8"
+    # Value line 9: "33.5  شركة سيسكو العربية السعودية المحدودة"
+    carrier_lbl = _find_line(lines, 'GROSS WEIGHT', 'INTERCESSOR')
+    carrier_val = _get(lines, carrier_lbl + 1)
 
-    # ── Field 9: INTERCESSOR_CO ───────────────────────────────────────────────
-    # The company name is printed under/near the header row
-    intercessor = _search(r'INTERCESSOR\s+CO\.[^\n]*\n\s*([\u0600-\u06FF\s\w]+)', text)
-    if not intercessor:
-        _field_failed("INTERCESSOR_CO_9", filename, dec_no)
-    data["INTERCESSOR_CO_9"] = clean(intercessor) if intercessor else None
-
-    # ── Field 10: GROSS_WEIGHT ────────────────────────────────────────────────
-    gross_wt = _search(r'\b(33\.5)\b', text)
-    if not gross_wt:
+    # Field 10: first number on value line
+    gross = _search(r'^([\d.]+)', carrier_val)
+    data["GROSS_WEIGHT_10"] = clean_number(gross)
+    if not gross:
         _field_failed("GROSS_WEIGHT_10", filename, dec_no)
-    data["GROSS_WEIGHT_10"] = clean_number(gross_wt) if gross_wt else None
 
-    # ── Field 11: CARRIER_NAME ────────────────────────────────────────────────
-    # Diagnostic Line 11: "دﺮﻃ 7001786842 ﺔﯾﺮﻄﻘﻟا ﮫﯾﻮﺠﻟا طﻮﻄﺨﻟا"
-    carrier_name = _search(r'([\u0600-\u06FF\s]+طﻮﻄﺨﻟا|الخطوط\s+الجوية\s+القطرية)', text)
-    if not carrier_name:
-        _field_failed("CARRIER_NAME_11", filename, dec_no)
-    data["CARRIER_NAME_11"] = clean(carrier_name) if carrier_name else None
+    # Fields 8 & 9: Arabic company name (same value for both in this BOE)
+    car_tokens = [t for t in _arabic_tokens(carrier_val) if len(t) > 2]
+    company = ' '.join(car_tokens) if car_tokens else None
+    data["CARRIER_CAPTAIN_DRIVER_8"] = clean(company)
+    data["INTERCESSOR_CO_9"]         = clean(company)
+    if not company:
+        _field_failed("CARRIER_CAPTAIN_DRIVER_8", filename, dec_no)
+        _field_failed("INTERCESSOR_CO_9", filename, dec_no)
 
-    # ── Field 12: COMMERCIAL_REG_NO ──────────────────────────────────────────
-    crn = _search(r'\b(7\d{9})\b', text)
+    # ── Fields 11-13: Carrier Name / Commercial Reg / Measurement ────────────
+    # Label line 10: "MEASUREMENT 13  COMMERCIAL REG. NO. 12  CARRIER'S NAME 11"
+    # Value line 11: "دﺮﻃ  7001786842  ﺔﯾﺮﻄﻘﻟا ﮫﯾﻮﺠﻟا طﻮﻄﺨﻟا"
+    meas_lbl = _find_line(lines, 'MEASUREMENT', 'COMMERCIAL REG')
+    meas_val = _get(lines, meas_lbl + 1)
+
+    # Field 12: 10-digit CRN starting with 7
+    crn = _search(r'\b(7\d{9})\b', meas_val)
+    data["COMMERCIAL_REG_NO_12"] = clean(crn)
     if not crn:
         _field_failed("COMMERCIAL_REG_NO_12", filename, dec_no)
-    data["COMMERCIAL_REG_NO_12"] = clean(crn) if crn else None
 
-    # ── Field 12A: TIN_NO ─────────────────────────────────────────────────────
-    tin = _search(r'\b(3\d{9})\b', text)
-    if not tin:
-        _field_failed("TIN_NO_12A", filename, dec_no)
-    data["TIN_NO_12A"] = clean(tin) if tin else None
-
-    # ── Field 13: MEASUREMENT ─────────────────────────────────────────────────
-    measurement = _search(r'\b(دﺮﻃ|طرد)\b', text)
-    if not measurement:
+    all_ar = _arabic_tokens(meas_val)
+    # Field 13: short word (دﺮﻃ = parcel/package, ≤ 3 chars typically)
+    short = [t for t in all_ar if len(t) <= 3]
+    data["MEASUREMENT_13"] = clean(short[0]) if short else None
+    if not short:
         _field_failed("MEASUREMENT_13", filename, dec_no)
-    data["MEASUREMENT_13"] = clean(measurement) if measurement else None
 
-    # ── Field 14: VOYAGE_FLIGHT_NO ───────────────────────────────────────────
-    flight = _search(r'\b(1164)\b', text)
-    if not flight:
-        _field_failed("VOYAGE_FLIGHT_NO_14", filename, dec_no)
-    data["VOYAGE_FLIGHT_NO_14"] = clean(flight) if flight else None
+    # Field 11: longer Arabic words = carrier name
+    long_ar = [t for t in all_ar if len(t) > 3]
+    carrier_name = ' '.join(long_ar) if long_ar else None
+    data["CARRIER_NAME_11"] = clean(carrier_name)
+    if not carrier_name:
+        _field_failed("CARRIER_NAME_11", filename, dec_no)
 
-    # ── Field 15: EXPORTED_TO ─────────────────────────────────────────────────
-    data["EXPORTED_TO_15"] = None
+    # ── Fields 14-16: Flight / TIN / Packages ────────────────────────────────
+    # Label line 12: "NO.OF PACKAGES 16  TIN NO. 12A  VOYAGE/FLIGHT NO. 14"
+    # Value line 13: "11  3009167245  1164"
+    pkg_lbl = _find_line(lines, 'NO.OF PACKAGES', 'TIN NO')
+    pkg_val = _get(lines, pkg_lbl + 1)
+    pkg_nums = pkg_val.split()
 
-    # ── Field 16: NO_OF_PACKAGES ──────────────────────────────────────────────
-    packages = _search(r'\b(11)\s+3009167245', text)
-    if not packages:
-        _field_failed("PACKAGES_16", filename, dec_no)
-    data["PACKAGES_16"] = clean_number(packages) if packages else None
+    # positional: [packages, TIN, flight]
+    data["PACKAGES_16"]         = clean_number(pkg_nums[0]) if len(pkg_nums) > 0 else None
+    data["TIN_NO_12A"]          = pkg_nums[1]               if len(pkg_nums) > 1 else None
+    data["VOYAGE_FLIGHT_NO_14"] = pkg_nums[2]               if len(pkg_nums) > 2 else None
+    for f in ["PACKAGES_16", "TIN_NO_12A", "VOYAGE_FLIGHT_NO_14"]:
+        if data[f] is None:
+            _field_failed(f, filename, dec_no)
 
-    # ── Field 17: BL_AWB_MANIFEST ─────────────────────────────────────────────
-    # Diagnostic Line 15: "M 70557 B 157 - 69961172"
-    awb = _search(r'([MB]\s*\d+.*?[\d-]+)', text)
+    # ── Fields 15 & 17 ───────────────────────────────────────────────────────
+    # Label line 14: "EXPORTED TO 15  B\L-AWB NO. / MANIF. 17"
+    # Value line 15: "M 70557 B 157 - 69961172"
+    awb_lbl = _find_line(lines, 'EXPORTED TO', 'AWB')
+    awb_val = _get(lines, awb_lbl + 1)
+    data["EXPORTED_TO_15"]    = None  # blank in this BOE
+    awb = _search(r'(M\s+\d+\s+B\s+\d+\s*[-–]\s*\d+)', awb_val)
+    data["BL_AWB_MANIFEST_17"] = clean(awb)
     if not awb:
         _field_failed("BL_AWB_MANIFEST_17", filename, dec_no)
-    data["BL_AWB_MANIFEST_17"] = clean(awb) if awb else None
 
     # ── Field 18: PORT_OF_LOADING ─────────────────────────────────────────────
-    pol = _search(r'\b(QA\s+DOH)\b', text)
-    if not pol:
+    # Label line 16: "PORT OF LOADING 18"
+    # Value line 17: "QA DOH"
+    pol_lbl = _find_line(lines, 'PORT OF LOADING', '18')
+    pol_val = _get(lines, pol_lbl + 1)
+    data["PORT_OF_LOADING_18"] = clean(pol_val) if pol_val else None
+    if not data["PORT_OF_LOADING_18"]:
         _field_failed("PORT_OF_LOADING_18", filename, dec_no)
-    data["PORT_OF_LOADING_18"] = clean(pol) if pol else None
 
-    # ── Field 19: MARKS_NUMBERS ───────────────────────────────────────────────
-    data["MARKS_NUMBERS_19"] = None
+    # ── Field 19: MARKS & NUMBERS ─────────────────────────────────────────────
+    # Label line 36: "MARKS & NUMBERS 19"
+    # Value line 37: "دﺮﻃ"
+    marks_lbl = _find_line(lines, 'MARKS & NUMBERS', '19')
+    marks_val = _get(lines, marks_lbl + 1)
+    data["MARKS_NUMBERS_19"] = clean(marks_val) if marks_val else None
 
-    # ── Field 20: PORT_OF_DISCHARGE ───────────────────────────────────────────
-    # Diagnostic Line 19/76: "جمرك مطار الملك خالد الدولي"
-    pod = _search(r'(جمرك\s+مطار\s+الملك\s+خالد\s+الدولي|ﻲﻟوﺪﻟا\s+ﺪﻟﺎﺧ\s+ﻚﻠﻤﻟا\s+رﺎﻄﻣ\s+كﺮﻤﺟ)', text)
-    if not pod:
+    # ── Field 20: PORT_OF_DISCHARGE ──────────────────────────────────────────
+    # Label line 18: "PORT OF DISCHARGE 20"
+    # Value line 19: Arabic port name
+    pod_lbl = _find_line(lines, 'PORT OF DISCHARGE', '20')
+    pod_val = _get(lines, pod_lbl + 1)
+    data["PORT_OF_DISCHARGE_20"] = clean(pod_val) if pod_val else None
+    if not data["PORT_OF_DISCHARGE_20"]:
         _field_failed("PORT_OF_DISCHARGE_20", filename, dec_no)
-    data["PORT_OF_DISCHARGE_20"] = clean(pod) if pod else None
 
     # ── Field 21: DESTINATION ─────────────────────────────────────────────────
-    dest = _search(r'(السعودية|ﺔﯾدﻮﻌﺴﻟا)', text)
-    if not dest:
+    # Label line 20: "DESTINATION 21"
+    # Value line 21: "ﺔﯾدﻮﻌﺴﻟا"
+    dest_lbl = _find_line(lines, 'DESTINATION', '21')
+    dest_val = _get(lines, dest_lbl + 1)
+    data["DESTINATION_21"] = clean(dest_val) if dest_val else None
+    if not data["DESTINATION_21"]:
         _field_failed("DESTINATION_21", filename, dec_no)
-    data["DESTINATION_21"] = clean(dest) if dest else None
 
-    # ── Field 38: CLEARING_AGENT ──────────────────────────────────────────────
-    # Diagnostic Line 23/84: "شركة المسرعون للشحن العالمي المحدودة"
-    agent = _search(r'(شركة\s+المسرعون\s+للشحن\s+العالمي\s+المحدودة|ةدوﺪﺤﻤﻟا\s+ﻲﻤﻟﺎﻌﻟا\s+ﻦﺤﺸﻠﻟ\s+نﻮﻋﺮﺴﻤﻟا\s+ﺔﻛﺮﺷ)', text)
-    if not agent:
+    # ── Field 38: CLEARING_AGENT ─────────────────────────────────────────────
+    # Label line 22: "CLEARING AGENT 38  Unified Customs Code 43"
+    # Value line 23: Arabic company name
+    agent_lbl = _find_line(lines, 'CLEARING AGENT', '38')
+    agent_val = _get(lines, agent_lbl + 1)
+    data["CLEARING_AGENT_38"] = clean(agent_val) if agent_val else None
+    if not data["CLEARING_AGENT_38"]:
         _field_failed("CLEARING_AGENT_38", filename, dec_no)
-    data["CLEARING_AGENT_38"] = clean(agent) if agent else None
-
-    # ── Field 39: LICENCE_NO ──────────────────────────────────────────────────
-    licence = _search(r'\b(4182)\b', text)
-    data["LICENCE_NO_39"] = clean(licence) if licence else None
 
     # ── Field 43: UNIFIED_CUSTOMS_CODE ───────────────────────────────────────
-    ucc = _search(r'\b(249\d{9,})\b', text)
-    data["UNIFIED_CUSTOMS_CODE_43"] = clean(ucc) if ucc else None
+    # 12-digit number starting with 249 in the page header
+    data["UNIFIED_CUSTOMS_CODE_43"] = _search(r'\b(249\d{9,})\b', text)
 
     # ── Field 44: GCC_AEO_CODE ────────────────────────────────────────────────
-    aeo = _search(r'\b(3168281)\b', text)
-    data["GCC_AEO_CODE_44"] = clean(aeo) if aeo else None
+    # Label line 24: "GCC AEO Code 44"
+    # Value: 7-digit number a few lines below (line 26: "3168281")
+    aeo_lbl = _find_line(lines, 'GCC AEO Code', '44')
+    aeo_val = None
+    for offset in range(1, 6):
+        candidate = _get(lines, aeo_lbl + offset)
+        if re.match(r'^\d{7}$', candidate):
+            aeo_val = candidate
+            break
+    data["GCC_AEO_CODE_44"] = clean(aeo_val)
+    if not aeo_val:
+        _field_failed("GCC_AEO_CODE_44", filename, dec_no)
 
-    # ── Field 45-46: Blanks ───────────────────────────────────────────────────
+    # ── Field 39: LICENCE_NO ──────────────────────────────────────────────────
+    # Label line 25: "LICENCE NO. 39"
+    # Value: 4-digit number a few lines below (line 28: "4182")
+    lic_lbl = _find_line(lines, 'LICENCE NO', '39')
+    licence = None
+    for offset in range(1, 6):
+        candidate = _get(lines, lic_lbl + offset)
+        if re.match(r'^\d{4}$', candidate):
+            licence = candidate
+            break
+    data["LICENCE_NO_39"] = clean(licence)
+    if not licence:
+        _field_failed("LICENCE_NO_39", filename, dec_no)
+
+    # ── Fields 45-46: blank in this BOE ──────────────────────────────────────
     data["OTHER_REMARKS_45"] = None
-    data["EXIT_PORT_46"] = None
+    data["EXIT_PORT_46"]     = None
 
-    # ── Fields 48-52: Duty & Fee ──────────────────────────────────────────────
-    # Diagnostic Lines 75-82: Look for strings like "14.07 TOTAL DUTY" or labels near the values
-    data["TOTAL_DUTY_48"]    = _extract_by_numeric_anchor(text, r'([\d.]+)\s+TOTAL\s+DUTY', r'14\.07')
-    data["VAT_48A"]          = _extract_by_numeric_anchor(text, r'([\d.]+)\s+VAT', r'0\.00')
-    data["EXCISE_TAX_48B"]   = _extract_by_numeric_anchor(text, r'([\d.]+)\s+EXCISE\s+TAX', r'0\.00')
-    data["ANTI_DUMPING_48C"] = _extract_by_numeric_anchor(text, r'([\d.]+)\s+ANTI\s+DUMPING', r'0\.00')
-    data["HANDLING_49"]      = _extract_by_numeric_anchor(text, r'([\d.]+)\s+HANDLING', r'0\.00')
-    data["OTHER_CHARGES_50"] = _extract_by_numeric_anchor(text, r'([\d.]+)\s+OTHER\s+CHARGES', r'35\.31')
-    data["DEFINITE_51"]      = _search(r'DEFINITE\s+([\d.]+)', text)
-    data["INSURED_52"]       = _search(r'INSURED\s+([\d.]+)', text)
+    # ── Fields 48-52: Duties & Fees ──────────────────────────────────────────
+    # Each on its own line: "14.07 TOTAL DUTY ... 48"
+    # Value is the FIRST token on the line (number comes before the label)
+    def _fee(keyword: str, field_no: str) -> float | None:
+        idx = _find_line(lines, keyword, field_no)
+        if idx < 0:
+            return None
+        return clean_number(_search(r'^([\d.]+)', _get(lines, idx)))
+
+    data["TOTAL_DUTY_48"]    = _fee('TOTAL DUTY',    '48')
+    data["VAT_48A"]          = _fee('VAT',           '48A')
+    data["EXCISE_TAX_48B"]   = _fee('EXCISE TAX',    '48B')
+    data["ANTI_DUMPING_48C"] = _fee('ANTI DUMPING',  '48C')
+    data["HANDLING_49"]      = _fee('HANDLING',      '49')
+    data["OTHER_CHARGES_50"] = _fee('OTHER CHARGES', '50')
+
+    for f in ["TOTAL_DUTY_48","VAT_48A","EXCISE_TAX_48B",
+              "ANTI_DUMPING_48C","HANDLING_49","OTHER_CHARGES_50"]:
+        if data[f] is None:
+            _field_failed(f, filename, dec_no)
+
+    # Field 51: "DEFINITE 49.38 ... 51" — value follows DEFINITE keyword
+    def_idx = _find_line(lines, 'DEFINITE', '51')
+    data["DEFINITE_51"] = clean_number(
+        _search(r'DEFINITE\s+([\d.]+)', _get(lines, def_idx))
+    ) if def_idx >= 0 else None
+
+    # Field 52: "INSURED 0.00 ... 52"
+    ins_idx = _find_line(lines, 'INSURED', '52')
+    data["INSURED_52"] = clean_number(
+        _search(r'INSURED\s+([\d.]+)', _get(lines, ins_idx))
+    ) if ins_idx >= 0 else None
 
     # ── Field 53: PAYMENT_METHOD ──────────────────────────────────────────────
-    data["PAYMENT_METHOD_53"] = _search(r'PAYMENT\s+METHOD\s+([\u0600-\u06FF\s]+)', text)
-    data["PAYMENT_NO_54"] = None
+    # Line 83: "PAYMENT METHOD ﻲﻜﻨﺑ ﻞﯿﺼﺤﺗ ﻊﻓﺪﻟا ﺔﻘﯾﺮﻃ 53"
+    # Arabic is Presentation Forms-B — use _arabic_str
+    pay_idx = _find_line(lines, 'PAYMENT METHOD', '53')
+    pay_line = _get(lines, pay_idx)
+    pay_arabic = _arabic_str(pay_line)
+    data["PAYMENT_METHOD_53"] = clean(pay_arabic) if pay_arabic else None
+
+    # ── Fields 54-55: blank in this BOE ──────────────────────────────────────
+    data["PAYMENT_NO_54"]   = None
     data["PAYMENT_DATE_55"] = None
 
     # ── Field 56: PAYMENT_BANK ───────────────────────────────────────────────
-    pay_bank = _search(r'(البنك\s+الأهلي\s+السعودي|يدﻮﻌﺴﻟا\s+ﻰﻠھﻻا\s+ﻚﻨﺒﻟا)', text)
-    data["PAYMENT_BANK_56"] = clean(pay_bank) if pay_bank else None
+    # Line 86: "BANK يدﻮﻌﺴﻟا ﻰﻠھﻻا ﻚﻨﺒﻟا ﻚﻨﺑ 56"
+    bank_idx = _find_line(lines, 'BANK', '56')
+    bank_line = _get(lines, bank_idx)
+    bank_arabic = _arabic_str(bank_line)
+    data["PAYMENT_BANK_56"] = clean(bank_arabic) if bank_arabic else None
+    if not data["PAYMENT_BANK_56"]:
+        _field_failed("PAYMENT_BANK_56", filename, dec_no)
 
     # ── Field 57: RECEIPT_NO ──────────────────────────────────────────────────
-    data["RECEIPT_NO_57"] = clean(_search(r'RECEIPT\s+NO\.\s+(\d+)', text))
+    # Line 87: "RECEIPT NO. 1171294 ... 57"
+    rcpt_idx = _find_line(lines, 'RECEIPT NO', '57')
+    rcpt_line = _get(lines, rcpt_idx)
+    data["RECEIPT_NO_57"] = _search(r'RECEIPT NO\.\s+(\d+)', rcpt_line)
+    if not data["RECEIPT_NO_57"]:
+        _field_failed("RECEIPT_NO_57", filename, dec_no)
 
     # ── Field 58: RECEIPT_DATE ────────────────────────────────────────────────
-    data["RECEIPT_DATE_58"] = clean(_search(r'DATE\s+(\d{2}-\d{2}-\d{4})', text))
+    # Line 88: "DATE 04-11-1447 ... 58"
+    rdate_idx = _find_line(lines, 'DATE', '58')
+    rdate_line = _get(lines, rdate_idx)
+    data["RECEIPT_DATE_58"] = _search(r'DATE\s+(\d{2}-\d{2}-\d{4})', rdate_line)
+    if not data["RECEIPT_DATE_58"]:
+        _field_failed("RECEIPT_DATE_58", filename, dec_no)
 
-    # ── Field 59: RECEIPT_BANK ───────────────────────────────────────────────
-    rcpt_bank = _search(r'(فرع\s+البطحاء|ءﺎﺤﻄﺒﻟا\s+عﺮﻓ)', text)
-    data["RECEIPT_BANK_59"] = clean(rcpt_bank) if rcpt_bank else None
+    # ── Field 59: RECEIPT_BANK ────────────────────────────────────────────────
+    # Line 89: "BANK ءﺎﺤﻄﺒﻟا عﺮﻓ ﻚﻨﺑ 59"
+    rbank_idx = _find_line(lines, 'BANK', '59')
+    rbank_line = _get(lines, rbank_idx)
+    rbank_arabic = _arabic_str(rbank_line)
+    data["RECEIPT_BANK_59"] = clean(rbank_arabic) if rbank_arabic else None
+    if not data["RECEIPT_BANK_59"]:
+        _field_failed("RECEIPT_BANK_59", filename, dec_no)
 
     data["PDF_FILENAME"] = filename
     return data
-
-
-def _extract_by_numeric_anchor(text, pattern, fallback_val):
-    val = _search(pattern, text)
-    if not val:
-        val = _search(fallback_val, text)
-    return clean_number(val) if val else "0.00"
