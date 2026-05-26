@@ -154,7 +154,7 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
                     "NET_WEIGHT_36":   net,
                     "ITEM_UNIT_35":    unit,
                     "ITEM_QTY_34":     qty,
-                    "PKG_QTY_32":      1.0,
+                    "PKG_QTY_32":      1.0,   #need fix, may be more than 1
                 })
                 pkg_assigned.add(item_no)
                 last_pkg_item_no = item_no
