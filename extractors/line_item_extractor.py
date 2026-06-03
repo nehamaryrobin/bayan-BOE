@@ -9,7 +9,7 @@ Package rows:  GROSS  NET  UNIT(any non-space token)  QTY  ITEM_NO
 Key fixes:
   1. Arabic range covers U+0600-06FF AND U+FE70-FEFF (Presentation Forms-B)
   2. Package rows only merged into existing value-row items — never create ghost items
-  3. Unit token matched with \S+ (not Arabic-only) to handle mixed unicode
+  3. Unit token matched with \\S+ (not Arabic-only) to handle mixed unicode
   4. Description looked up from line ABOVE value line when not found inline
 """
 import re
@@ -154,7 +154,7 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
                     "NET_WEIGHT_36":   net,
                     "ITEM_UNIT_35":    unit,
                     "ITEM_QTY_34":     qty,
-                    "PKG_QTY_32":      1.0,   #need fix, may be more than 1
+                    "PKG_QTY_32":      1.0,
                 })
                 pkg_assigned.add(item_no)
                 last_pkg_item_no = item_no
@@ -222,15 +222,21 @@ def _parse_value_body(body: str, hs_code: str, item_no: int,
     if not origin:
         _field_failed("ORIGIN_24", filename, dec_no, item_no)
 
-    # ── GOODS DESCRIPTION: Arabic text inline ─────────────────────────────────
-    # Covers both U+0600-06FF and U+FE70-FEFF
-    arabic_parts = re.findall(r'[\u0600-\u06FF\uFE70-\uFEFF][^\d\n]{2,}', body)
+    # ── GOODS DESCRIPTION: Arabic text AFTER the origin code ─────────────────
+    # Everything before the origin code is financial data + noise.
+    # Everything after the origin code is the description.
+    if origin:
+        after_origin = body[body.index(origin) + len(origin):].strip()
+    else:
+        after_origin = body
+
+    arabic_parts = re.findall(r'[\u0600-\u06FF\uFE70-\uFEFF][^\d\n]{2,}', after_origin)
     if arabic_parts:
         raw_desc = ' '.join(arabic_parts)
-        # Strip income type tokens and border noise fragments from description
+        # Strip any stray income type tokens (ﻲﻔﻌﻣ, ت, ﻲﻌﻄﻗ) and % sign
         raw_desc = re.sub(r'\b(ﻲﻔﻌﻣ|معفي|ﻲﻌﻄﻗ|قطعي)\b', '', raw_desc)
-        raw_desc = re.sub(r'\bت\b', '', raw_desc)           # lone "ت" (exempt suffix)
-        raw_desc = re.sub(r'\b[ﺍ-ﻱ]{1,2}\b', '', raw_desc) # 1-2 char Arabic fragments
+        raw_desc = re.sub(r'\bت\b', '', raw_desc)
+        raw_desc = re.sub(r'%', '', raw_desc)
         raw_desc = re.sub(r'\s{2,}', ' ', raw_desc).strip()
         desc = clean(raw_desc) if raw_desc.strip() else None
     else:

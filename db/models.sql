@@ -9,7 +9,6 @@ CREATE DATABASE IF NOT EXISTS bayan
   COLLATE utf8mb4_unicode_ci;
 
 USE bayan;
-
 -- ============================================================
 -- TABLE 1: boe_header
 -- One row per BOE declaration file
@@ -22,19 +21,21 @@ CREATE TABLE IF NOT EXISTS boe_header (
     pdf_filename                VARCHAR(512)    NOT NULL COMMENT 'Source PDF filename (unique per file)',
 
     -- Declaration info
-    dec_date_2                  VARCHAR(50)     DEFAULT NULL COMMENT 'Field 2 - Declaration Date (Hijri/Gregorian)',
+    dec_date_hijri_2            VARCHAR(20)     DEFAULT NULL COMMENT 'Field 2A - Declaration Date Hijri',
+    dec_date_gregorian_2        VARCHAR(20)     DEFAULT NULL COMMENT 'Field 2B - Declaration Date Gregorian',
     dec_type_3                  VARCHAR(255)    DEFAULT NULL COMMENT 'Field 3 - Declaration Type',
     port_type_4                 VARCHAR(100)    DEFAULT NULL COMMENT 'Field 4 - Port Type (air/sea/land)',
 
     -- Delivery & parties
     delivery_order_no_5         VARCHAR(255)    DEFAULT NULL COMMENT 'Field 5 - Delivery Order No',
     importer_exporter_6         VARCHAR(512)    DEFAULT NULL COMMENT 'Field 6 - Importer/Exporter Name',
-    net_weight_unload_date_7    VARCHAR(100)    DEFAULT NULL COMMENT 'Field 7 - Net Weight / Unload Date',
+    net_weight_7b               DECIMAL(12,3)   DEFAULT NULL COMMENT 'Field 7B - Net Weight',
+    unload_date_7a              VARCHAR(20)     DEFAULT NULL COMMENT 'Field 7A - Unload Date',
     carrier_captain_driver_8    VARCHAR(512)    DEFAULT NULL COMMENT 'Field 8 - Carrier/Captain/Driver',
     intercessor_co_9            VARCHAR(512)    DEFAULT NULL COMMENT 'Field 9 - Intercessor Company',
     gross_weight_10             DECIMAL(12,3)   DEFAULT NULL COMMENT 'Field 10 - Gross Weight',
     carrier_name_11             VARCHAR(512)    DEFAULT NULL COMMENT 'Field 11 - Carrier Name',
-
+    
     -- Registration & tax
     commercial_reg_no_12        VARCHAR(100)    DEFAULT NULL COMMENT 'Field 12 - Commercial Registration No',
     tin_no_12a                  VARCHAR(100)    DEFAULT NULL COMMENT 'Field 12A - Tax Identification No',
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS boe_header (
     voyage_flight_no_14         VARCHAR(100)    DEFAULT NULL COMMENT 'Field 14 - Voyage/Flight No',
     exported_to_15              VARCHAR(255)    DEFAULT NULL COMMENT 'Field 15 - Exported To',
     packages_16                 DECIMAL(10,2)   DEFAULT NULL COMMENT 'Field 16 - No. of Packages',
-    bl_awb_manifest_17          VARCHAR(255)    DEFAULT NULL COMMENT 'Field 17 - B/L AWB Manifest No',
+    awb_no_17a                  VARCHAR(100)    DEFAULT NULL COMMENT 'Field 17A - AWB Number',
+    manifest_no_17b             VARCHAR(100)    DEFAULT NULL COMMENT 'Field 17B - Manifest Number',
     port_of_loading_18          VARCHAR(255)    DEFAULT NULL COMMENT 'Field 18 - Port of Loading',
     marks_numbers_19            VARCHAR(255)    DEFAULT NULL COMMENT 'Field 19 - Marks & Numbers',
     port_of_discharge_20        VARCHAR(255)    DEFAULT NULL COMMENT 'Field 20 - Port of Discharge',

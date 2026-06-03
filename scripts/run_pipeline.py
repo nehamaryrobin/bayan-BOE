@@ -18,7 +18,7 @@ from watchdog.events import FileSystemEventHandler, FileCreatedEvent
 
 from app.config import INPUT_DIR  # Path to watch for new PDFs
 from app.logger import get_logger
-from scripts.pipeline import process_file
+from scripts.pipeline import process_file  
 
 logger = get_logger("watcher")
 

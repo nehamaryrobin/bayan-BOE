@@ -8,7 +8,10 @@ Orchestrates the full BOE processing pipeline for a single PDF file:
   5. Insert into MySQL (single transaction)
   6. Move file to processed/ or failed/
 """
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app.logger import get_logger
 from extractors.pdf_to_text import extract_pages
 from extractors.header_extractor import extract_header
@@ -49,7 +52,6 @@ def process_file(pdf_path: str) -> bool:
                 f"SKIP_DUPLICATE | file='{filename}' | dec_no='{dec_no}'"
             )
             conn.close()
-            # Move to processed so it doesn't get reprocessed on restart
             move_to_processed(pdf_path)
             return False
 

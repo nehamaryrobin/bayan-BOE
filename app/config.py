@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── Database ──────────────────────────────────────────────────────────────────
 DB_CONFIG = {
@@ -10,6 +13,7 @@ DB_CONFIG = {
     "charset":   "utf8mb4",
     "collation": "utf8mb4_unicode_ci",
     "use_unicode": True,
+    
 }
 
 # ── Paths ─────────────────────────────────────────────────────────────────────

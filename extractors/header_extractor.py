@@ -43,7 +43,6 @@ def _find_line(lines: list[str], *keywords) -> int:
 def _get(lines: list[str], idx: int) -> str:
     return lines[idx].strip() if 0 <= idx < len(lines) else ""
 
-
 def _search(pattern: str, text: str, flags=re.MULTILINE) -> str | None:
     m = re.search(pattern, text, flags)
     if m:
@@ -89,11 +88,13 @@ def extract_header(pages: list[str], filename: str) -> dict:
     # "21-04-2026 1447-11-04" → store as "1447-11-04 / 21-04-2026"
     dates = re.findall(r'\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}', val_line)
     if len(dates) >= 2:
-        # first is Gregorian (DD-MM-YYYY), second is Hijri (YYYY-MM-DD)
-        data["DEC_DATE_2"] = f"{dates[1]} / {dates[0]}"
+        data["DEC_DATE_HIJRI_2"]     = dates[1]   # 1447-11-04
+        data["DEC_DATE_GREGORIAN_2"] = dates[0]   # 21-04-2026
     else:
-        data["DEC_DATE_2"] = None
-        _field_failed("DEC_DATE_2", filename, dec_no)
+        data["DEC_DATE_HIJRI_2"]     = None
+        data["DEC_DATE_GREGORIAN_2"] = None
+        _field_failed("DEC_DATE_HIJRI_2", filename, dec_no)
+        _field_failed("DEC_DATE_GREGORIAN_2", filename, dec_no)
 
     # ── Field 3: DEC_TYPE — Arabic declaration type on same line ─────────────
     # Contains "داﺮﯿﺘﺳإ نﺎﯿﺑ" (import declaration) in mixed unicode
@@ -117,7 +118,7 @@ def extract_header(pages: list[str], filename: str) -> dict:
     deliv_val = _get(lines, deliv_lbl + 1)
 
     # Field 5: 8-digit delivery order number
-    delivery = _search(r'\b(\d{8})\b', deliv_val)
+    delivery = _search(r'(\(FCL\).+)$', deliv_val)
     if not delivery:
         _field_failed("DELIVERY_ORDER_NO_5", filename, dec_no)
     data["DELIVERY_ORDER_NO_5"] = clean(delivery)
@@ -132,10 +133,14 @@ def extract_header(pages: list[str], filename: str) -> dict:
     data["IMPORTER_EXPORTER_6"] = clean(importer)
 
     # Field 7: "03-11-1447 / 33.5"
-    net_wt = _search(r'(\d{2}-\d{2}-\d{4}\s*/\s*[\d.]+)', deliv_val)
-    if not net_wt:
-        _field_failed("NET_WEIGHT_UNLOAD_DATE_7", filename, dec_no)
-    data["NET_WEIGHT_UNLOAD_DATE_7"] = clean(net_wt)
+    unload_date = _search(r'(\d{2}-\d{2}-\d{4})\s*/', deliv_val)
+    net_weight  = _search(r'/\s*([\d.]+)', deliv_val)
+    if not unload_date:
+        _field_failed("UNLOAD_DATE_7A", filename, dec_no)
+    if not net_weight:
+        _field_failed("NET_WEIGHT_7B", filename, dec_no)
+    data["UNLOAD_DATE_7A"] = clean(unload_date)
+    data["NET_WEIGHT_7B"]  = clean_number(net_weight)
 
     # ── Fields 8-10: Carrier / Intercessor / Gross Weight ────────────────────
     # Label line 8: "GROSS WEIGHT 10  INTERCESSOR CO. 9  CARRIER'S/CAPTAIN/DRIVER 8"
@@ -191,6 +196,7 @@ def extract_header(pages: list[str], filename: str) -> dict:
     pkg_val = _get(lines, pkg_lbl + 1)
     pkg_nums = pkg_val.split()
 
+
     # positional: [packages, TIN, flight]
     data["PACKAGES_16"]         = clean_number(pkg_nums[0]) if len(pkg_nums) > 0 else None
     data["TIN_NO_12A"]          = pkg_nums[1]               if len(pkg_nums) > 1 else None
@@ -199,16 +205,21 @@ def extract_header(pages: list[str], filename: str) -> dict:
         if data[f] is None:
             _field_failed(f, filename, dec_no)
 
+
     # ── Fields 15 & 17 ───────────────────────────────────────────────────────
     # Label line 14: "EXPORTED TO 15  B\L-AWB NO. / MANIF. 17"
     # Value line 15: "M 70557 B 157 - 69961172"
     awb_lbl = _find_line(lines, 'EXPORTED TO', 'AWB')
     awb_val = _get(lines, awb_lbl + 1)
     data["EXPORTED_TO_15"]    = None  # blank in this BOE
-    awb = _search(r'(M\s+\d+\s+B\s+\d+\s*[-–]\s*\d+)', awb_val)
-    data["BL_AWB_MANIFEST_17"] = clean(awb)
-    if not awb:
-        _field_failed("BL_AWB_MANIFEST_17", filename, dec_no)
+    awb_no   = _search(r'(M\s+\d+)', awb_val)
+    manifest = _search(r'[-–]\s*(\d+)\s*$', awb_val)
+    if not awb_no:
+        _field_failed("AWB_NO_17A", filename, dec_no)
+    if not manifest:
+        _field_failed("MANIFEST_NO_17B", filename, dec_no)
+    data["AWB_NO_17A"]      = clean(awb_no)
+    data["MANIFEST_NO_17B"] = clean(manifest)
 
     # ── Field 18: PORT_OF_LOADING ─────────────────────────────────────────────
     # Label line 16: "PORT OF LOADING 18"
@@ -270,6 +281,7 @@ def extract_header(pages: list[str], filename: str) -> dict:
     data["GCC_AEO_CODE_44"] = clean(aeo_val)
     if not aeo_val:
         _field_failed("GCC_AEO_CODE_44", filename, dec_no)
+        
 
     # ── Field 39: LICENCE_NO ──────────────────────────────────────────────────
     # Label line 25: "LICENCE NO. 39"

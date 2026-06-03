@@ -13,12 +13,12 @@ logger = get_logger("db.inserter")
 _INSERT_HEADER = """
 INSERT INTO boe_header (
     dec_no, pdf_filename,
-    dec_date_2, dec_type_3, port_type_4,
-    delivery_order_no_5, importer_exporter_6, net_weight_unload_date_7,
+    dec_date_hijri_2, dec_date_gregorian_2, dec_type_3, port_type_4,
+    delivery_order_no_5, importer_exporter_6, net_weight_7b, unload_date_7a,
     carrier_captain_driver_8, intercessor_co_9, gross_weight_10,
     carrier_name_11, commercial_reg_no_12, tin_no_12a,
     measurement_13, voyage_flight_no_14, exported_to_15,
-    packages_16, bl_awb_manifest_17, port_of_loading_18,
+    packages_16, awb_no_17a, manifest_no_17b, port_of_loading_18,
     marks_numbers_19, port_of_discharge_20, destination_21,
     clearing_agent_38, licence_no_39, unified_customs_code_43,
     gcc_aeo_code_44, other_remarks_45, exit_port_46,
@@ -28,12 +28,12 @@ INSERT INTO boe_header (
     payment_bank_56, receipt_no_57, receipt_date_58, receipt_bank_59
 ) VALUES (
     %(DEC_NO)s, %(PDF_FILENAME)s,
-    %(DEC_DATE_2)s, %(DEC_TYPE_3)s, %(PORT_TYPE_4)s,
-    %(DELIVERY_ORDER_NO_5)s, %(IMPORTER_EXPORTER_6)s, %(NET_WEIGHT_UNLOAD_DATE_7)s,
+    %(DEC_DATE_HIJRI_2)s, %(DEC_DATE_GREGORIAN_2)s, %(DEC_TYPE_3)s, %(PORT_TYPE_4)s,
+    %(DELIVERY_ORDER_NO_5)s, %(IMPORTER_EXPORTER_6)s, %(NET_WEIGHT_7B)s, %(UNLOAD_DATE_7A)s,
     %(CARRIER_CAPTAIN_DRIVER_8)s, %(INTERCESSOR_CO_9)s, %(GROSS_WEIGHT_10)s,
     %(CARRIER_NAME_11)s, %(COMMERCIAL_REG_NO_12)s, %(TIN_NO_12A)s,
     %(MEASUREMENT_13)s, %(VOYAGE_FLIGHT_NO_14)s, %(EXPORTED_TO_15)s,
-    %(PACKAGES_16)s, %(BL_AWB_MANIFEST_17)s, %(PORT_OF_LOADING_18)s,
+    %(PACKAGES_16)s, %(AWB_NO_17A)s, %(MANIFEST_NO_17B)s, %(PORT_OF_LOADING_18)s,
     %(MARKS_NUMBERS_19)s, %(PORT_OF_DISCHARGE_20)s, %(DESTINATION_21)s,
     %(CLEARING_AGENT_38)s, %(LICENCE_NO_39)s, %(UNIFIED_CUSTOMS_CODE_43)s,
     %(GCC_AEO_CODE_44)s, %(OTHER_REMARKS_45)s, %(EXIT_PORT_46)s,
@@ -84,9 +84,8 @@ def insert_boe(conn: MySQLConnection, header: dict, line_items: list[dict]) -> N
     """
     cursor = conn.cursor()
     try:
-        conn.start_transaction()
-
-        # Insert header
+        # MySQLConnection starts a transaction implicitly when statements are executed.
+        # Avoid calling start_transaction() after session initialization SQL such as SET NAMES.
         cursor.execute(_INSERT_HEADER, header)
         logger.debug(f"Header inserted: dec_no={header['DEC_NO']}")
 
@@ -105,6 +104,8 @@ def insert_boe(conn: MySQLConnection, header: dict, line_items: list[dict]) -> N
         logger.error(
             f"ROLLBACK | dec_no='{header.get('DEC_NO')}' | "
             f"file='{header.get('PDF_FILENAME')}' | error={e}"
+            
+            
         )
         raise
     finally:
