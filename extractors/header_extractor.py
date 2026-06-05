@@ -79,7 +79,7 @@ def extract_header(pages: list[str], filename: str) -> dict:
     info_idx = _find_line(lines, 'Dec No', 'Dec Date', 'Dec Type')
     val_line = _get(lines, info_idx + 1)
 
-    dec_no = _search(r'\b(\d{7})\b', val_line)
+    dec_no = _search(r'\b(\d{6,7})\b', val_line)
     if not dec_no:
         raise ValueError(f"[{filename}] Could not extract DEC_NO")
     data["DEC_NO"] = dec_no
@@ -124,8 +124,8 @@ def extract_header(pages: list[str], filename: str) -> dict:
     data["DELIVERY_ORDER_NO_5"] = clean(delivery)
 
     # Field 6: Arabic company name — longest Arabic token sequence after stripping
-    imp_tokens = _arabic_tokens(deliv_val)
-    # Keep tokens > 2 chars to skip short noise fragments
+    before_fcl = deliv_val.split('(FCL)')[0] if '(FCL)' in deliv_val else deliv_val
+    imp_tokens = _arabic_tokens(before_fcl)
     imp_tokens = [t for t in imp_tokens if len(t) > 2]
     importer = ' '.join(imp_tokens) if imp_tokens else None
     if not importer:
@@ -157,11 +157,9 @@ def extract_header(pages: list[str], filename: str) -> dict:
     # Fields 8 & 9: Arabic company name (same value for both in this BOE)
     car_tokens = [t for t in _arabic_tokens(carrier_val) if len(t) > 2]
     company = ' '.join(car_tokens) if car_tokens else None
-    data["CARRIER_CAPTAIN_DRIVER_8"] = clean(company)
-    data["INTERCESSOR_CO_9"]         = clean(company)
-    if not company:
-        _field_failed("CARRIER_CAPTAIN_DRIVER_8", filename, dec_no)
-        _field_failed("INTERCESSOR_CO_9", filename, dec_no)
+    data["CARRIER_CAPTAIN_DRIVER_8"] = clean(company) if company else None
+    data["INTERCESSOR_CO_9"]         = clean(company) if company else None
+    
 
     # ── Fields 11-13: Carrier Name / Commercial Reg / Measurement ────────────
     # Label line 10: "MEASUREMENT 13  COMMERCIAL REG. NO. 12  CARRIER'S NAME 11"
@@ -287,13 +285,18 @@ def extract_header(pages: list[str], filename: str) -> dict:
     # Label line 25: "LICENCE NO. 39"
     # Value: 4-digit number a few lines below (line 28: "4182")
     lic_lbl = _find_line(lines, 'LICENCE NO', '39')
-    licence = None
+    licence_num = None
+    licence_arabic = None
     for offset in range(1, 6):
         candidate = _get(lines, lic_lbl + offset)
         if re.match(r'^\d{4}$', candidate):
-            licence = candidate
+            licence_num = candidate
+        if re.search(_AR, candidate) and not re.match(r'^\d', candidate):
+            licence_arabic = candidate
+        if licence_num and licence_arabic:
             break
-    data["LICENCE_NO_39"] = clean(licence)
+    licence = f"{clean(licence_arabic)} {licence_num}" if licence_arabic and licence_num else licence_num
+    data["LICENCE_NO_39"] = clean(licence) if licence else None
     if not licence:
         _field_failed("LICENCE_NO_39", filename, dec_no)
 
@@ -339,6 +342,11 @@ def extract_header(pages: list[str], filename: str) -> dict:
     # Arabic is Presentation Forms-B — use _arabic_str
     pay_idx = _find_line(lines, 'PAYMENT METHOD', '53')
     pay_line = _get(lines, pay_idx)
+    # Remove everything from "طریقة الدفع" onward (it's the Arabic label, not the value)
+    # Both reversed (ﺔﻘﯾﺮﻃ ﻊﻓﺪﻟا) and normal (طریقة الدفع) forms
+    pay_line = re.split(r'ﺔﻘﯾﺮﻃ|طریقة', pay_line)[0]
+    # Also remove "PAYMENT METHOD" English label and field number
+    pay_line = re.sub(r'PAYMENT\s+METHOD|53', '', pay_line)
     pay_arabic = _arabic_str(pay_line)
     data["PAYMENT_METHOD_53"] = clean(pay_arabic) if pay_arabic else None
 
@@ -351,17 +359,21 @@ def extract_header(pages: list[str], filename: str) -> dict:
     bank_idx = _find_line(lines, 'BANK', '56')
     bank_line = _get(lines, bank_idx)
     bank_arabic = _arabic_str(bank_line)
+    # Remove standalone ﻚﻨﺑ / بنك (the Arabic word for "bank" — it's the label not the value)
+    bank_arabic = re.sub(r'\bﻚﻨﺑ\b|\bبنك\b', '', bank_arabic).strip()
     data["PAYMENT_BANK_56"] = clean(bank_arabic) if bank_arabic else None
     if not data["PAYMENT_BANK_56"]:
         _field_failed("PAYMENT_BANK_56", filename, dec_no)
 
     # ── Field 57: RECEIPT_NO ──────────────────────────────────────────────────
     # Line 87: "RECEIPT NO. 1171294 ... 57"
-    rcpt_idx = _find_line(lines, 'RECEIPT NO', '57')
-    rcpt_line = _get(lines, rcpt_idx)
-    data["RECEIPT_NO_57"] = _search(r'RECEIPT NO\.\s+(\d+)', rcpt_line)
-    if not data["RECEIPT_NO_57"]:
-        _field_failed("RECEIPT_NO_57", filename, dec_no)
+    rbank_idx = _find_line(lines, 'BANK', '59')
+    rbank_line = _get(lines, rbank_idx)
+    rbank_arabic = _arabic_str(rbank_line)
+    rbank_arabic = re.sub(r'\bﻚﻨﺑ\b|\bبنك\b', '', rbank_arabic).strip()
+    data["RECEIPT_BANK_59"] = clean(rbank_arabic) if rbank_arabic else None
+    if not data["RECEIPT_BANK_59"]:
+        _field_failed("RECEIPT_BANK_59", filename, dec_no)
 
     # ── Field 58: RECEIPT_DATE ────────────────────────────────────────────────
     # Line 88: "DATE 04-11-1447 ... 58"

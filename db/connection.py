@@ -1,24 +1,27 @@
 """
 connection.py
-MySQL connection using utf8mb4 for full Arabic/Unicode support.
+SQL Server connection using pymssql.
+Unicode/NVARCHAR handled natively by SQL Server.
 """
-import mysql.connector
-from mysql.connector import MySQLConnection
+import pymssql
 from app.config import DB_CONFIG
 from app.logger import get_logger
 
 logger = get_logger("db.connection")
 
-def get_connection() -> MySQLConnection:
-    """Return a new MySQL connection configured for utf8mb4."""
+
+def get_connection():
     try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        # Enforce utf8mb4 at session level as a belt-and-suspenders measure
-        cursor = conn.cursor()
-        cursor.execute("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci")
-        cursor.execute("SET CHARACTER SET utf8mb4")
-        cursor.close()
+        conn = pymssql.connect(
+            server=DB_CONFIG["host"],
+            port=DB_CONFIG["port"],
+            user=DB_CONFIG["user"],
+            password=DB_CONFIG["password"],
+            database=DB_CONFIG["database"],
+            charset="UTF-8",
+        )
+        logger.debug("DB connection established")
         return conn
-    except mysql.connector.Error as e:
+    except Exception as e:
         logger.error(f"DB connection failed: {e}")
         raise

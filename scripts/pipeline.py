@@ -69,5 +69,31 @@ def process_file(pdf_path: str) -> bool:
         return False
 
     finally:
-        if conn and conn.is_connected():
+        if conn:
             conn.close()
+
+
+def main() -> int:
+    """Entry point for running the pipeline directly from the command line."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Process a single BOE PDF file end-to-end."
+    )
+    parser.add_argument(
+        "pdf_path",
+        help="Path to the BOE PDF file to process",
+    )
+    args = parser.parse_args()
+
+    pdf_path = args.pdf_path
+    if not os.path.exists(pdf_path):
+        logger.error(f"File not found: {pdf_path}")
+        return 1
+
+    success = process_file(pdf_path)
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
