@@ -367,13 +367,11 @@ def extract_header(pages: list[str], filename: str) -> dict:
 
     # ── Field 57: RECEIPT_NO ──────────────────────────────────────────────────
     # Line 87: "RECEIPT NO. 1171294 ... 57"
-    rbank_idx = _find_line(lines, 'BANK', '59')
-    rbank_line = _get(lines, rbank_idx)
-    rbank_arabic = _arabic_str(rbank_line)
-    rbank_arabic = re.sub(r'\bﻚﻨﺑ\b|\bبنك\b', '', rbank_arabic).strip()
-    data["RECEIPT_BANK_59"] = clean(rbank_arabic) if rbank_arabic else None
-    if not data["RECEIPT_BANK_59"]:
-        _field_failed("RECEIPT_BANK_59", filename, dec_no)
+    rcpt_idx = _find_line(lines, 'RECEIPT NO', '57')
+    rcpt_line = _get(lines, rcpt_idx)
+    data["RECEIPT_NO_57"] = _search(r'RECEIPT NO\.\s+(\d+)', rcpt_line)
+    if not data["RECEIPT_NO_57"]:
+        _field_failed("RECEIPT_NO_57", filename, dec_no)
 
     # ── Field 58: RECEIPT_DATE ────────────────────────────────────────────────
     # Line 88: "DATE 04-11-1447 ... 58"
