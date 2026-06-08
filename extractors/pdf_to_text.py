@@ -8,16 +8,15 @@ from app.logger import get_logger
 
 logger = get_logger("pdf_to_text")
 
-
 def extract_pages(pdf_path: str) -> list[str]:
     """
     Open the PDF and return a list of raw text strings, one per page.
-    Raises on any read error so the pipeline can catch and roll back.
     """
     pages = []
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text(x_tolerance=3, y_tolerance=3)
+            # ENABLE LAYOUT MODE to preserve column gaps
+            text = page.extract_text(layout=True, x_tolerance=3, y_tolerance=3)
             if text:
                 pages.append(text)
                 logger.debug(f"Page {i}: extracted {len(text)} characters")

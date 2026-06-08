@@ -9,8 +9,9 @@ Package rows:  GROSS  NET  UNIT(any non-space token)  QTY  ITEM_NO
 Key fixes:
   1. Arabic range covers U+0600-06FF AND U+FE70-FEFF (Presentation Forms-B)
   2. Package rows only merged into existing value-row items — never create ghost items
-  3. Unit token matched with \\S+ (not Arabic-only) to handle mixed unicode
+  3. Unit token matched with \S+ (not Arabic-only) to handle mixed unicode
   4. Description looked up from line ABOVE value line when not found inline
+  5. Financial extraction logic splits before origin code and drops duty % cleanly.
 """
 import re
 from app.logger import get_logger
@@ -47,12 +48,6 @@ _PKG_NO_ITEMNO_RE = re.compile(
 
 # Pure Arabic description lines (no numbers, no HS codes, no English keywords)
 _DESC_ONLY_RE = re.compile(r'^[\u0600-\u06FF\uFE70-\uFEFF\s\-–]+$')
-
-# Income type tokens to strip from description
-_INCOME_NOISE_RE = re.compile(
-    r'\s*(ﻲﻔﻌﻣ|معفي|ت\s*$|ﻲﻌﻄﻗ|قطعي|%|ﺍﻟﻤﺴ\S*|ﺍﻭ\S*|ﻠﺺ\S*)\s*',
-    re.UNICODE
-)
 
 
 def _clean_row(row_str: str) -> str:
@@ -212,7 +207,8 @@ def _parse_value_body(body: str, hs_code: str, item_no: int,
     row: dict = {"ITEM_NO": item_no, "HS_CODE_22": hs_code}
 
     # ── ORIGIN: 2-letter ISO country code ────────────────────────────────────
-    _EXCLUDE = {"SAR", "USD", "EUR", "AED"}
+    # Exclude known currency codes so they aren't mistaken for origin codes
+    _EXCLUDE = {"SAR", "USD", "EUR", "AED", "GBP", "JPY", "CNY"}
     origin = None
     for m in re.finditer(r'\b([A-Z]{2})\b', body):
         if m.group(1) not in _EXCLUDE:
@@ -222,18 +218,20 @@ def _parse_value_body(body: str, hs_code: str, item_no: int,
     if not origin:
         _field_failed("ORIGIN_24", filename, dec_no, item_no)
 
-    # ── GOODS DESCRIPTION: Arabic text AFTER the origin code ─────────────────
-    # Everything before the origin code is financial data + noise.
-    # Everything after the origin code is the description.
+    # ── SPLIT BODY into Financial Part and Description Part ──────────────────
+    # Financial data is everything before the Origin code.
     if origin:
-        after_origin = body[body.index(origin) + len(origin):].strip()
+        fin_part = body[:body.index(origin)].strip()
+        desc_part = body[body.index(origin) + len(origin):].strip()
     else:
-        after_origin = body
+        fin_part = body
+        desc_part = ""
 
-    arabic_parts = re.findall(r'[\u0600-\u06FF\uFE70-\uFEFF][^\d\n]{2,}', after_origin)
+    # ── GOODS DESCRIPTION ────────────────────────────────────────────────────
+    arabic_parts = re.findall(r'[\u0600-\u06FF\uFE70-\uFEFF][^\d\n]{2,}', desc_part)
     if arabic_parts:
         raw_desc = ' '.join(arabic_parts)
-        # Strip any stray income type tokens (ﻲﻔﻌﻣ, ت, ﻲﻌﻄﻗ) and % sign
+        # Strip any stray income type tokens and % sign
         raw_desc = re.sub(r'\b(ﻲﻔﻌﻣ|معفي|ﻲﻌﻄﻗ|قطعي)\b', '', raw_desc)
         raw_desc = re.sub(r'\bت\b', '', raw_desc)
         raw_desc = re.sub(r'%', '', raw_desc)
@@ -243,46 +241,56 @@ def _parse_value_body(body: str, hs_code: str, item_no: int,
         desc = None
     row["GOODS_DESCRIPTION_23"] = desc
 
-    # ── CURRENCY TYPE ─────────────────────────────────────────────────────────
-    curr_m = re.search(r'\b(SAR|USD|EUR|AED)\b', body)
+    # ── CURRENCY TYPE ────────────────────────────────────────────────────────
+    curr_m = re.search(r'\b(SAR|USD|EUR|AED|GBP|JPY|CNY)\b', fin_part)
     row["CURRENCY_TYPE_26"] = curr_m.group(1) if curr_m else None
 
-    # ── DUTY RATE: "% 5" → 0.05 ──────────────────────────────────────────────
-    rate_m = re.search(r'%\s*(\d+)', body)
-    row["D_RATE_29"] = float(rate_m.group(1)) / 100 if rate_m else None
+    # ── DUTY RATE ────────────────────────────────────────────────────────────
+    # Handles both "% 5" and "5 %" formats
+    rate_m = re.search(r'(\d+(?:\.\d+)?)\s*%|%\s*(\d+(?:\.\d+)?)', fin_part)
+    if rate_m:
+        val = rate_m.group(1) or rate_m.group(2)
+        row["D_RATE_29"] = float(val) / 100
+    else:
+        row["D_RATE_29"] = None
 
-    # ── INCOME TYPE ───────────────────────────────────────────────────────────
-    # ﻲﻔﻌﻣ / معفي = exempt   |   ﻲﻌﻄﻗ / قطعي = definite
-    if re.search(r'ﻲﻔﻌﻣ|معفي', body):
+    # ── INCOME TYPE ──────────────────────────────────────────────────────────
+    if re.search(r'ﻲﻔﻌﻣ|معفي', fin_part):
         row["INCOME_TYPE_30"] = clean('معفي ت')
-    elif re.search(r'ﻲﻌﻄﻗ|قطعي', body):
+    elif re.search(r'ﻲﻌﻄﻗ|قطعي', fin_part):
         row["INCOME_TYPE_30"] = clean('قطعي')
     else:
         row["INCOME_TYPE_30"] = None
         _field_failed("INCOME_TYPE_30", filename, dec_no, item_no)
 
-    # ── NUMERIC VALUES ────────────────────────────────────────────────────────
-    # Left-to-right order in extracted text (RTL reversed from document):
-    #   TOTAL_DUTY | CIF_LOCAL | 1.00(rate) | FOREIGN_VALUE
-    nums = [
-        clean_number(n)
-        for n in re.findall(r'[\d,]+\.?\d*', body)
-        if clean_number(n) is not None
-    ]
+    # ── NUMERIC VALUES ───────────────────────────────────────────────────────
+    # 1. Strip the duty rate from the string so the "5" in "% 5" isn't counted as money
+    fin_no_rate = re.sub(r'\d+(?:\.\d+)?\s*%|%\s*\d+(?:\.\d+)?', '', fin_part)
 
-    # Currency rate is always 1.00 — use as positional anchor
-    rate_idx = next((i for i, n in enumerate(nums) if n == 1.0), None)
+    # 2. Extract remaining clean numbers
+    nums = []
+    for n in re.findall(r'\b\d[\d,]*\.?\d*\b', fin_no_rate):
+        val = clean_number(n)
+        if val is not None:
+            nums.append(val)
 
-    if rate_idx is not None and rate_idx >= 1:
+    # 3. Map based on strict Left-to-Right visual order
+    # Expected: TOTAL_DUTY | LOCAL_VALUE | CURRENCY_RATE | FOREIGN_VALUE
+    if len(nums) >= 4:
         row["TOTAL_DUTY_31"]      = nums[0]
-        row["CIF_LOCAL_VALUE_28"] = nums[rate_idx - 1]
-        row["CURRENCY_VALUE_27"]  = 1.0
-        row["FOREIGN_VALUE_25"]   = nums[rate_idx + 1] if rate_idx + 1 < len(nums) else None
+        row["CIF_LOCAL_VALUE_28"] = nums[1]
+        row["CURRENCY_VALUE_27"]  = nums[2]
+        row["FOREIGN_VALUE_25"]   = nums[3]
+    elif len(nums) == 3:
+        row["TOTAL_DUTY_31"]      = nums[0]
+        row["CIF_LOCAL_VALUE_28"] = nums[1]
+        row["CURRENCY_VALUE_27"]  = nums[2]
+        row["FOREIGN_VALUE_25"]   = None
     else:
         row["TOTAL_DUTY_31"]      = nums[0] if len(nums) > 0 else None
         row["CIF_LOCAL_VALUE_28"] = nums[1] if len(nums) > 1 else None
         row["CURRENCY_VALUE_27"]  = None
-        row["FOREIGN_VALUE_25"]   = nums[2] if len(nums) > 2 else None
+        row["FOREIGN_VALUE_25"]   = None
 
     for f in ["TOTAL_DUTY_31", "CIF_LOCAL_VALUE_28", "FOREIGN_VALUE_25"]:
         if row.get(f) is None:
