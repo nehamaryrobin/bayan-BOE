@@ -29,6 +29,28 @@ _NOISE = {
     "او اﻟﻤﺨﻠﺺ", "اﻟﻤﺨﻠﺺ", "او", "اﻟﺠﻤﺎرك", "QR Code",
 }
 
+_ALL_CURRENCIES = [
+        "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN",
+        "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL",
+        "BSD", "BTN", "BWP", "BYN", "BZD", "CAD", "CDF", "CHF", "CLP", "CNY",
+        "COP", "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP",
+        "ERN", "ETB", "EUR", "FJD", "FKP", "GBP", "GEL", "GHS", "GIP", "GMD",
+        "GNF", "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF", "IDR", "ILS",
+        "INR", "IQD", "IRR", "ISK", "JMD", "JOD", "JPY", "KES", "KGS", "KHR",
+        "KMF", "KPW", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD",
+        "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU",
+        "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK",
+        "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG",
+        "QAR", "RON", "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK",
+        "SGD", "SHP", "SLL", "SOS", "SRD", "SSP", "STN", "SVC", "SYP", "SZL",
+        "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS", "UAH",
+        "UGX", "USD", "UYU", "UZS", "VES", "VND", "VUV", "WST", "XAF", "XCD",
+        "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL"
+    ]
+
+# Dynamically build the regex string: r'\b(AED|AFN|ALL...|ZWL)\b'
+_CURRENCY_PATTERN = re.compile(r'\b(' + '|'.join(_ALL_CURRENCIES) + r')\b')
+
 # Single uppercase English letters/pairs that are vertical border noise fragments
 _BORDER_NOISE_RE = re.compile(r'^[A-Z]{1,3}$')
 
@@ -209,20 +231,27 @@ def _parse_value_body(body: str, hs_code: str, item_no: int,
     # ── ORIGIN: 2-letter ISO country code ────────────────────────────────────
     # Exclude known currency codes so they aren't mistaken for origin codes
     _EXCLUDE = {"SAR", "USD", "EUR", "AED", "GBP", "JPY", "CNY"}
+    _VALID_ORIGINS = {"US", "CN", "AE", "SA", "IN", "DE", "JP", "GB", "FR", "IT", "KR", "TR", "EG"}
     origin = None
+    origin_start = -1
+    origin_end = -1
+    
     for m in re.finditer(r'\b([A-Z]{2})\b', body):
-        if m.group(1) not in _EXCLUDE:
+        if m.group(1) in _VALID_ORIGINS:
             origin = m.group(1)
+            origin_start = m.start()
+            origin_end = m.end()
             break
+            
     row["ORIGIN_24"] = origin
     if not origin:
         _field_failed("ORIGIN_24", filename, dec_no, item_no)
 
     # ── SPLIT BODY into Financial Part and Description Part ──────────────────
     # Financial data is everything before the Origin code.
-    if origin:
-        fin_part = body[:body.index(origin)].strip()
-        desc_part = body[body.index(origin) + len(origin):].strip()
+    if origin and origin_start != -1:
+        fin_part = body[:origin_start].strip()
+        desc_part = body[origin_end:].strip()
     else:
         fin_part = body
         desc_part = ""
@@ -241,8 +270,10 @@ def _parse_value_body(body: str, hs_code: str, item_no: int,
         desc = None
     row["GOODS_DESCRIPTION_23"] = desc
 
+
+
     # ── CURRENCY TYPE ────────────────────────────────────────────────────────
-    curr_m = re.search(r'\b(SAR|USD|EUR|AED|GBP|JPY|CNY)\b', fin_part)
+    curr_m = _CURRENCY_PATTERN.search(fin_part)
     row["CURRENCY_TYPE_26"] = curr_m.group(1) if curr_m else None
 
     # ── DUTY RATE ────────────────────────────────────────────────────────────

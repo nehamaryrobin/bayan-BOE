@@ -41,7 +41,6 @@ def _find_line(lines: list[str], *keywords) -> int:
             return i
     return -1
 
-
 def _get(lines: list[str], idx: int) -> str:
     return lines[idx].strip() if 0 <= idx < len(lines) else ""
 
@@ -208,8 +207,31 @@ def extract_header(pages: list[str], filename: str) -> dict:
     licence_arabic = next((_get(lines, lic_lbl + i) for i in range(1, 6) if re.search(_AR, _get(lines, lic_lbl + i)) and not re.match(r'^\d', _get(lines, lic_lbl + i))), None)
     
     data["LICENCE_NO_39"] = clean(f"{clean(licence_arabic)} {licence_num}") if licence_arabic and licence_num else licence_num
-    data["OTHER_REMARKS_45"] = None
-    data["EXIT_PORT_46"]     = None
+   
+
+    # ── Field 45: OTHER_REMARKS ───────────────────────────────────────────────
+    rem_idx = _find_line(lines, 'Other Remarks', '45')
+    if rem_idx >= 0:
+        rem_val = _get(lines, rem_idx + 1)
+        # Guard: If the next line is the EXIT PORT label, the remarks are empty
+        if 'EXIT PORT' in rem_val or '46' in rem_val:
+            data["OTHER_REMARKS_45"] = None
+        else:
+            data["OTHER_REMARKS_45"] = clean(rem_val)
+    else:
+        data["OTHER_REMARKS_45"] = None
+
+    # ── Field 46: EXIT_PORT ───────────────────────────────────────────────────
+    exit_idx = _find_line(lines, 'EXIT PORT', '46')
+    if exit_idx >= 0:
+        exit_val = _get(lines, exit_idx + 1)
+        # Guard: If the next line is the QR Code label, the exit port is empty
+        if 'QR Code' in exit_val or '47' in exit_val or 'ﺔﻌﯾﺮﺴﻟا' in exit_val:
+            data["EXIT_PORT_46"] = None
+        else:
+            data["EXIT_PORT_46"] = clean(exit_val)
+    else:
+        data["EXIT_PORT_46"] = None
 
 
     # ── Fields 48-52: Duties & Fees ──────────────────────────────────────────
