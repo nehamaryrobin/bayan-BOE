@@ -13,12 +13,26 @@ logger = get_logger("header_extractor")
 # Both standard Arabic and Presentation Forms-B
 _AR = r'[\u0600-\u06FF\uFE70-\uFEFF]'
 
+_BOE_VALUE_LINE_RE = re.compile(
+    r'Custom Declaration\s*(.*?)\s+(داﺮﯿﺘﺳإ نﺎﯿﺑ|بيان إستيراد|بيان جمركي|بيان استيراد)\s+' 
+    r'(\d{2}-\d{2}-\d{4})\s+(\d{2}-\d{2}-\d{4})\s+(\d{6,7})',
+    re.IGNORECASE | re.DOTALL,
+)
+
 _NOISE = {
     "ESU", "TNEGA", "S'REIRRAC", "REKORB", "RO", "RETROPMI",
     "ﻹﺳﺘﻌﻤﺎﻻت", "وﻛﯿﻞ", "اﻟﻨﺎﻗﻠﺔ", "اﻟﻤﺴﺘﻮرد",
     "او اﻟﻤﺨﻠﺺ", "اﻟﻤﺨﻠﺺ", "او", "اﻟﺠﻤﺎرك", "QR Code",
 }
 
+_BOE_VALUE_LINE_RE = re.compile(r"""
+    Custom\s+Declaration\s*
+    (?P<port_type>جوي|يﻮﺟ|بري|يرﺑ|بحري|يرحب)?\s* # 1. Optional Port Type 
+    (?P<dec_type>[\u0600-\u06FF\uFE70-\uFEFF\w\s]+?)\s* # 2. Dec Type (Lazy match Arabic text)
+    (?P<gregorian_date>\d{2}-\d{2}-\d{4})\s+            # 3. Gregorian Date
+    (?P<hijri_date>\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4})\s+ # 4. Hijri Date
+    (?P<dec_no>\d{6,8})                                 # 5. Dec Number (Integers)
+""", re.VERBOSE | re.IGNORECASE | re.DOTALL)
 
 def _strip_noise(pages: list[str]) -> list[str]:
     out = []
@@ -70,49 +84,36 @@ def _arabic_str(line: str) -> str:
 
 
 def extract_header(pages: list[str], filename: str) -> dict:
+    # 1. Clean the noise and prepare text formats
     pages = _strip_noise(pages)
     lines = [l for l in pages[0].split('\n') if l.strip()]
     text  = '\n'.join(lines)
     data  = {}
 
-    # ── Field 1: DEC_NO ───────────────────────────────────────────────────────
-    info_idx = _find_line(lines, 'Dec No', 'Dec Date', 'Dec Type')
-    val_line = _get(lines, info_idx + 1)
-
-    dec_no = _search(r'\b(\d{6,7})\b', val_line)
-    if not dec_no:
-        raise ValueError(f"[{filename}] Could not extract DEC_NO")
-    data["DEC_NO"] = dec_no
-
-    # ── Field 2: DEC_DATE ─────────────────────────────────────────────────────
-    dates = re.findall(r'\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}', val_line)
-    if len(dates) >= 2:
-        data["DEC_DATE_HIJRI_2"]     = dates[1]   
-        data["DEC_DATE_GREGORIAN_2"] = dates[0]   
-    else:
-        data["DEC_DATE_HIJRI_2"]     = None
-        data["DEC_DATE_GREGORIAN_2"] = None
-
-    # ── Field 4: PORT_TYPE ────────────────────────────────────────────────────
-    port_type = _search(r'\b(يﻮﺟ|جوي|يرﺑ|بري|يرحب|بحري)\b', val_line)
-    data["PORT_TYPE_4"] = clean(port_type) if port_type else None
-
-    # ── Field 3: DEC_TYPE (Cleaned overlap) ───────────────────────────────────
-    dec_type_str = re.sub(r'\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}|[A-Za-z]+', ' ', val_line)
-    dec_type_str = re.sub(r'يﻮﺟ|جوي|يرﺑ|بري|يرحب|بحري|ﻲــﻛﺮــــــــــﻤﺟ نﺎــــــــﯿـﺑ|بيان جمركي', '', dec_type_str)
-    dec_type_tokens = [t for t in dec_type_str.split() if re.search(_AR, t) and len(t) > 2]
-    data["DEC_TYPE_3"] = clean(' '.join(dec_type_tokens)) if dec_type_tokens else None
+    # ── Fields 1-4: DEC_NO / DEC_DATE / DEC_TYPE / PORT_TYPE ───────────────
+    match = _BOE_VALUE_LINE_RE.search(text)
+    if not match:
+        raise ValueError(f"[{filename}] Could not extract DEC_NO and header info")
+    
+    header = match.groupdict()
+    data["DEC_NO"]               = header["dec_no"]
+    data["DEC_DATE_GREGORIAN_2"] = header["gregorian_date"]
+    data["DEC_DATE_HIJRI_2"]     = header["hijri_date"]
+    data["DEC_TYPE_3"]           = clean(header["dec_type"]) if header.get("dec_type") else None
+    data["PORT_TYPE_4"]          = clean(header["port_type"]) if header.get("port_type") else None
 
 
     # ── Fields 5-7: Delivery / Importer / Net Weight ─────────────────────────
     deliv_lbl = _find_line(lines, 'DELIVERY ORDER NO', '5')
     deliv_val = _get(lines, deliv_lbl + 1)
 
-    delivery = _search(r'(\(FCL\).+)$', deliv_val)
+    # Captures either FCL or LCL
+    delivery = _search(r'(\((?:FCL|LCL)\).+)$', deliv_val)
     data["DELIVERY_ORDER_NO_5"] = clean(delivery) if delivery else None
 
-    before_fcl = deliv_val.split('(FCL)')[0] if '(FCL)' in deliv_val else deliv_val
-    imp_tokens = [t for t in _arabic_tokens(before_fcl) if len(t) > 2]
+    # Splits on either (FCL) or (LCL) to safely extract the Arabic importer name
+    before_fcl_lcl = re.split(r'\((?:FCL|LCL)\)', deliv_val)[0]
+    imp_tokens = [t for t in _arabic_tokens(before_fcl_lcl) if len(t) > 2]
     data["IMPORTER_EXPORTER_6"] = clean(' '.join(imp_tokens)) if imp_tokens else None
 
     data["UNLOAD_DATE_7A"] = clean(_search(r'(\d{2}-\d{2}-\d{4})\s*/', deliv_val))
@@ -123,19 +124,11 @@ def extract_header(pages: list[str], filename: str) -> dict:
     carrier_lbl = _find_line(lines, 'GROSS WEIGHT', 'INTERCESSOR')
     carrier_val = _get(lines, carrier_lbl + 1)
 
-    # Use layout=True gaps to handle empty Field 8 cleanly
     cols_8_10 = re.split(r'\s{3,}', carrier_val.strip())
     
-    data["GROSS_WEIGHT_10"]          = None
-    data["INTERCESSOR_CO_9"]         = None
-    data["CARRIER_CAPTAIN_DRIVER_8"] = None
-
-    if len(cols_8_10) > 0:
-        data["GROSS_WEIGHT_10"] = clean_number(_search(r'^([\d.]+)', cols_8_10[0]))
-    if len(cols_8_10) > 1:
-        data["INTERCESSOR_CO_9"] = clean(_arabic_str(cols_8_10[1]))
-    if len(cols_8_10) > 2:
-        data["CARRIER_CAPTAIN_DRIVER_8"] = clean(_arabic_str(cols_8_10[2]))
+    data["GROSS_WEIGHT_10"]          = clean_number(_search(r'^([\d.]+)', cols_8_10[0])) if len(cols_8_10) > 0 else None
+    data["INTERCESSOR_CO_9"]         = clean(_arabic_str(cols_8_10[1])) if len(cols_8_10) > 1 else None
+    data["CARRIER_CAPTAIN_DRIVER_8"] = clean(_arabic_str(cols_8_10[2])) if len(cols_8_10) > 2 else None
 
 
     # ── Fields 11-13: Carrier Name / Commercial Reg / Measurement ────────────
@@ -144,16 +137,9 @@ def extract_header(pages: list[str], filename: str) -> dict:
     
     cols_11_13 = re.split(r'\s{3,}', meas_val.strip())
     
-    data["MEASUREMENT_13"]       = None
-    data["COMMERCIAL_REG_NO_12"] = None
-    data["CARRIER_NAME_11"]      = None
-
-    if len(cols_11_13) > 0:
-        data["MEASUREMENT_13"] = clean(_arabic_str(cols_11_13[0]))
-    if len(cols_11_13) > 1:
-        data["COMMERCIAL_REG_NO_12"] = clean(_search(r'\b(7\d{9})\b', cols_11_13[1]))
-    if len(cols_11_13) > 2:
-        data["CARRIER_NAME_11"] = clean(_arabic_str(cols_11_13[2]))
+    data["MEASUREMENT_13"]       = clean(_arabic_str(cols_11_13[0])) if len(cols_11_13) > 0 else None
+    data["COMMERCIAL_REG_NO_12"] = clean(_search(r'\b(7\d{9})\b', cols_11_13[1])) if len(cols_11_13) > 1 else None
+    data["CARRIER_NAME_11"]      = clean(_arabic_str(cols_11_13[2])) if len(cols_11_13) > 2 else None
 
 
     # ── Fields 14-16: Flight / TIN / Packages ────────────────────────────────
@@ -162,26 +148,17 @@ def extract_header(pages: list[str], filename: str) -> dict:
     
     cols_14_16 = re.split(r'\s{3,}', pkg_val.strip())
     
-    data["PACKAGES_16"]         = None
-    data["TIN_NO_12A"]          = None
-    data["VOYAGE_FLIGHT_NO_14"] = None
-
-    if len(cols_14_16) > 0:
-        data["PACKAGES_16"] = clean_number(cols_14_16[0])
-    if len(cols_14_16) > 1:
-        data["TIN_NO_12A"] = cols_14_16[1]
-    if len(cols_14_16) > 2:
-        data["VOYAGE_FLIGHT_NO_14"] = cols_14_16[2]
+    data["PACKAGES_16"]         = clean_number(cols_14_16[0]) if len(cols_14_16) > 0 else None
+    data["TIN_NO_12A"]          = cols_14_16[1] if len(cols_14_16) > 1 else None
+    data["VOYAGE_FLIGHT_NO_14"] = cols_14_16[2] if len(cols_14_16) > 2 else None
 
 
-    # ── Fields 15 & 17 ───────────────────────────────────────────────────────
+    # ── Fields 15 & 17: Exported To / AWB & Manifest ─────────────────────────
     awb_lbl = _find_line(lines, 'EXPORTED TO', 'AWB')
     awb_val = _get(lines, awb_lbl + 1)
     
     data["EXPORTED_TO_15"]  = None 
     data["AWB_NO_17A"]      = clean(_search(r'(M\s+\d+)', awb_val))
-    
-    # Updated regex to capture the full prefix (optional letter + digits), dash, and suffix
     data["MANIFEST_NO_17B"] = clean(_search(r'(\b\d{3}\s*[-–]\s*\d+)', awb_val))
 
 
@@ -285,7 +262,7 @@ def extract_header(pages: list[str], filename: str) -> dict:
     # Error logging
     for k, v in data.items():
         if v is None and k not in ("EXPORTED_TO_15", "OTHER_REMARKS_45", "EXIT_PORT_46", "PAYMENT_NO_54", "PAYMENT_DATE_55"):
-            _field_failed(k, filename, dec_no)
+            _field_failed(k, filename, data["DEC_NO"])
 
     data["PDF_FILENAME"] = filename
     return data

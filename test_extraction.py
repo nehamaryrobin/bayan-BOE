@@ -13,10 +13,10 @@ import json
 # Allow imports from project root
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from extractors.pdf_to_text import extract_pages
+from extractors.pdf_to_text import extract_pages, extract_words_with_coords
 from extractors.header_extractor import extract_header
 # CHANGE 1: Import the new coordinate-based tabular group extractor
-from extractors.line_item_extractor import extract_tabular_groups
+from extractors.line_item_extractor import extract_tabular_groups, _clean_row, _NOISE
 
 
 def print_section(title: str) -> None:
@@ -85,8 +85,11 @@ def main():
         print(f"  FAILED: {e}")
         sys.exit(1)
 
-    # ── Step 3: Line item extraction ──────────────────────────────────────────
-    print_section("STEP 3: LINE ITEMS (TABULAR GROUPING)")
+    # ── Step 3: Debug row strings after grouping/cleaning ─────────────────────
+    print_step4_rows(pdf_path)
+
+    # ── Step 4: Line item extraction ──────────────────────────────────────────
+    print_section("STEP 4: LINE ITEMS (TABULAR GROUPING)")
     try:
         dec_no = header["DEC_NO"]
         
@@ -121,6 +124,43 @@ def diagnose(text: str) -> None:
     for i, line in enumerate(text.split('\n'), 1):
         if line.strip():
             print(f"{i:3}: {repr(line)}")
+
+
+def print_step4_rows(pdf_path: str) -> None:
+    """
+    Print the cleaned row strings that are fed into the regex engine
+    after the row-grouping and noise-cleaning step.
+    """
+    print_section("STEP 4: DEBUG ROWS SENT TO REGEX")
+
+    pages_words = extract_words_with_coords(pdf_path)
+    row_count = 0
+
+    for page_no, words in enumerate(pages_words, start=1):
+        if not words:
+            continue
+
+        sorted_words = sorted(words, key=lambda w: w["top"])
+        row_groups = []
+        current_row = [sorted_words[0]]
+
+        for w in sorted_words[1:]:
+            if abs(w["top"] - current_row[0]["top"]) <= 6:
+                current_row.append(w)
+            else:
+                row_groups.append(current_row)
+                current_row = [w]
+        if current_row:
+            row_groups.append(current_row)
+
+        for row in row_groups:
+            row_str = " ".join(w["text"] for w in sorted(row, key=lambda w: w["x0"])).strip()
+            row_str = _clean_row(row_str)
+            if row_str and row_str not in _NOISE:
+                row_count += 1
+                print(f"  Page {page_no:>2} | row {row_count:>2}: {row_str}")
+
+    print(f"\n  Total cleaned rows printed: {row_count}")
 
 
 if __name__ == "__main__":
