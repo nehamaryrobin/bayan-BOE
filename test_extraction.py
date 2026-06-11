@@ -67,7 +67,7 @@ def main():
     # ── Step 2: Header extraction ─────────────────────────────────────────────
     print_section("STEP 2: HEADER FIELDS")
     try:
-        header = extract_header(pages, filename)
+        header = extract_header(pdf_path, filename)
         for key, value in header.items():
             print_field(key, value)
 

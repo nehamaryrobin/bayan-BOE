@@ -39,7 +39,7 @@ def process_file(pdf_path: str) -> bool:
             raise ValueError(f"No text could be extracted from '{filename}'")
 
         # ── Step 2: Parse header ──────────────────────────────────────────────
-        header = extract_header(pages, filename)
+        header = extract_header(pdf_path, filename)
         dec_no = header["DEC_NO"]
 
         # ── Step 3: Parse line items ──────────────────────────────────────────

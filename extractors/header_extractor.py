@@ -7,6 +7,7 @@ Uses field numbers and known line positions as anchors.
 import re
 from app.logger import get_logger
 from utils.arabic_utils import clean, clean_number
+from extractors.pdf_to_text import extract_pages
 
 logger = get_logger("header_extractor")
 
@@ -83,7 +84,16 @@ def _arabic_str(line: str) -> str:
     return ' '.join(_arabic_tokens(line))
 
 
-def extract_header(pages: list[str], filename: str) -> dict:
+def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
+    """
+    Extract BOE header fields.
+
+    Accepts either:
+      - a PDF file path, in which case it reads the text via extract_pages(pdf_path)
+      - an already-extracted list of page strings, for backward compatibility
+    """
+    pages = extract_pages(pdf_or_pages) if isinstance(pdf_or_pages, str) else list(pdf_or_pages)
+
     # 1. Clean the noise and prepare text formats
     pages = _strip_noise(pages)
     lines = [l for l in pages[0].split('\n') if l.strip()]
@@ -154,14 +164,18 @@ def extract_header(pages: list[str], filename: str) -> dict:
 
 
     # ── Fields 15 & 17: Exported To / AWB & Manifest ─────────────────────────
-    awb_lbl = _find_line(lines, 'EXPORTED TO', 'AWB')
-    awb_val = _get(lines, awb_lbl + 1)
-    
     data["EXPORTED_TO_15"]  = None 
-    data["AWB_NO_17A"]      = clean(_search(r'(M\s+\d+)', awb_val))
-    data["MANIFEST_NO_17B"] = clean(_search(r'(\b\d{3}\s*[-–]\s*\d+)', awb_val))
-
-
+    
+    # 1. Search the ENTIRE 'text' variable (the whole page), not just a single line.
+    # This automatically catches lists that wrap across multiple lines (like row 16 and 17).
+    # We make the 'M' optional so we still catch the numbers even if 'M' was stripped as noise.
+    raw_awbs =  re.findall(r'(\b\d{2,3}\s*[-–]\s*\d{8})\b', text)
+    manifest_matches = re.findall(r'(?:M\s*)?(\d+)\s*(?=[A-Za-z]\s*\d{2,3}\s*[-–])', text, re.IGNORECASE)
+    
+    # 2. Re-attach the 'M' automatically and join multiple matches with a comma
+    data["AWB_NO_17A"]      = clean(', '.join(raw_awbs)) if raw_awbs else None
+    data["MANIFEST_NO_17B"] = clean(', '.join([f"M {num}" for num in manifest_matches])) if manifest_matches else None
+    
     # ── Single Value Headers ──────────────────────────────────────────────────
     def _simple_extract(key_1, key_2, clean_fn=clean):
         lbl = _find_line(lines, key_1, key_2)
