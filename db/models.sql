@@ -134,6 +134,7 @@ CREATE TABLE boe_line_items (
     -- Customs restrictions
     customs_restrictions_agency_40      NVARCHAR(255)       NULL,
     customs_release_ref_41              NVARCHAR(255)       NULL,
+    exemption_code_42                   NVARCHAR(50)        NULL,
 
     -- Audit
     created_at                          DATETIME            DEFAULT GETDATE(),

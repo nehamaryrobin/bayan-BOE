@@ -82,6 +82,30 @@ def is_duplicate(conn, dec_no: str, pdf_filename: str) -> bool:
     return result is not None
 
 
+def _normalize_header_params(header: dict) -> dict:
+    """Ensure every SQL placeholder used by the header insert exists."""
+    required = [
+        "DEC_NO", "PDF_FILENAME", "DEC_DATE_HIJRI_2", "DEC_DATE_GREGORIAN_2",
+        "DEC_TYPE_3", "PORT_TYPE_4", "DELIVERY_ORDER_NO_5", "IMPORTER_EXPORTER_6",
+        "UNLOAD_DATE_7A", "NET_WEIGHT_7B", "CARRIER_CAPTAIN_DRIVER_8",
+        "INTERCESSOR_CO_9", "GROSS_WEIGHT_10", "CARRIER_NAME_11",
+        "COMMERCIAL_REG_NO_12", "TIN_NO_12A", "MEASUREMENT_13",
+        "VOYAGE_FLIGHT_NO_14", "EXPORTED_TO_15", "PACKAGES_16", "AWB_NO_17A",
+        "MANIFEST_NO_17B", "PORT_OF_LOADING_18", "MARKS_NUMBERS_19",
+        "PORT_OF_DISCHARGE_20", "DESTINATION_21", "CLEARING_AGENT_38",
+        "LICENCE_NO_39", "UNIFIED_CUSTOMS_CODE_43", "GCC_AEO_CODE_44",
+        "OTHER_REMARKS_45", "EXIT_PORT_46", "TOTAL_DUTY_48", "VAT_48A",
+        "EXCISE_TAX_48B", "ANTI_DUMPING_48C", "HANDLING_49", "OTHER_CHARGES_50",
+        "DEFINITE_51", "INSURED_52", "PAYMENT_METHOD_53", "PAYMENT_NO_54",
+        "PAYMENT_DATE_55", "PAYMENT_BANK_56", "RECEIPT_NO_57", "RECEIPT_DATE_58",
+        "RECEIPT_BANK_59",
+    ]
+    params = dict(header)
+    for key in required:
+        params.setdefault(key, None)
+    return params
+
+
 def insert_boe(conn, header: dict, line_items: list[dict]) -> None:
     """
     Insert header + all line items in a single transaction.
@@ -89,7 +113,8 @@ def insert_boe(conn, header: dict, line_items: list[dict]) -> None:
     """
     cursor = conn.cursor()
     try:
-        cursor.execute(_INSERT_HEADER, header)
+        params = _normalize_header_params(header)
+        cursor.execute(_INSERT_HEADER, params)
         logger.debug(f"Header inserted: dec_no={header['DEC_NO']}")
 
         for item in line_items:

@@ -35,6 +35,19 @@ _BOE_VALUE_LINE_RE = re.compile(r"""
     (?P<dec_no>\d{6,8})                                 # 5. Dec Number (Integers)
 """, re.VERBOSE | re.IGNORECASE | re.DOTALL)
 
+import re
+
+_DELIVERY_ORDER_LINE_RE = re.compile(r"""
+    ^\s*
+    (?:(?P<unload_date>\d{2}-\d{2}-\d{4})\s*/\s*)? # 1. OPTIONAL: Unload Date + Slash (e.g., "03-11-1447 /")
+    (?P<net_weight>[\d,]+(?:\.\d+)?)\s+
+    (?P<importer_name>.+?)\s+
+    (?P<delivery_order>\((?:FCL|LCL)\).+?)\s+
+    (?P<booking_date>\d{2}-\d{2}-\d{4})\s+
+    (?P<order_no>\d+)
+    \s*$
+""", re.VERBOSE | re.IGNORECASE)
+
 def _strip_noise(pages: list[str]) -> list[str]:
     out = []
     for page in pages:
@@ -84,6 +97,32 @@ def _arabic_str(line: str) -> str:
     return ' '.join(_arabic_tokens(line))
 
 
+def _extract_field_7(deliv_val: str) -> tuple[str | None, float | None]:
+    """
+    Extract UNLOAD_DATE_7A and NET_WEIGHT_7B from the delivery line.
+    
+    Format A — date / weight:  '03-11-1447 / 33.5  شركة...'
+    Format B — weight only:    '1771  شركة...'
+    
+    Only look at the portion BEFORE (FCL) or (LCL) to avoid
+    picking up the delivery order date as the unload date.
+    """
+    # Take only the part before (FCL)/(LCL)
+    before_fcl = re.split(r'\((?:FCL|LCL)\)', deliv_val)[0].strip()
+
+    # Format A: starts with date / weight
+    format_a = re.match(r'^(\d{2}-\d{2}-\d{4})\s*/\s*([\d,]+(?:\.\d+)?)', before_fcl)
+    if format_a:
+        return format_a.group(1), clean_number(format_a.group(2))
+
+    # Format B: starts with just a number (weight only, no date)
+    format_b = re.match(r'^([\d,]+(?:\.\d+)?)\s', before_fcl)
+    if format_b:
+        return None, clean_number(format_b.group(1))
+
+    return None, None
+
+
 def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
     """
     Extract BOE header fields.
@@ -112,22 +151,27 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
     data["DEC_TYPE_3"]           = clean(header["dec_type"]) if header.get("dec_type") else None
     data["PORT_TYPE_4"]          = clean(header["port_type"]) if header.get("port_type") else None
 
-
     # ── Fields 5-7: Delivery / Importer / Net Weight ─────────────────────────
     deliv_lbl = _find_line(lines, 'DELIVERY ORDER NO', '5')
     deliv_val = _get(lines, deliv_lbl + 1)
 
-    # Captures either FCL or LCL
-    delivery = _search(r'(\((?:FCL|LCL)\).+)$', deliv_val)
-    data["DELIVERY_ORDER_NO_5"] = clean(delivery) if delivery else None
+    # Match the entire line against our comprehensive structural pattern
+    line_match = _DELIVERY_ORDER_LINE_RE.match(deliv_val)
 
-    # Splits on either (FCL) or (LCL) to safely extract the Arabic importer name
-    before_fcl_lcl = re.split(r'\((?:FCL|LCL)\)', deliv_val)[0]
-    imp_tokens = [t for t in _arabic_tokens(before_fcl_lcl) if len(t) > 2]
-    data["IMPORTER_EXPORTER_6"] = clean(' '.join(imp_tokens)) if imp_tokens else None
-
-    data["UNLOAD_DATE_7A"] = clean(_search(r'(\d{2}-\d{2}-\d{4})\s*/', deliv_val))
-    data["NET_WEIGHT_7B"]  = clean_number(_search(r'/\s*([\d.]+)', deliv_val))
+    if line_match:
+        res = line_match.groupdict()
+        
+        # Populate the dictionary variables directly from named groups
+        data["DELIVERY_ORDER_NO_5"] = clean(res["delivery_order"]) 
+        data["IMPORTER_EXPORTER_6"] = clean(res["importer_name"])
+        data["UNLOAD_DATE_7A"]       = clean(res["unload_date"]) if res["unload_date"] else None
+        data["NET_WEIGHT_7B"]        = clean_number(res["net_weight"])
+    else:
+        # Fallback handling in case of layout corruption
+        data["DELIVERY_ORDER_NO_5"] = None
+        data["IMPORTER_EXPORTER_6"] = None
+        data["UNLOAD_DATE_7A"]       = None
+        data["NET_WEIGHT_7B"]        = None
 
 
     # ── Fields 8-10: Carrier / Intercessor / Gross Weight ────────────────────
