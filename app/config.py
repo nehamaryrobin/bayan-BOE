@@ -3,8 +3,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import os
-
 DB_CONFIG = {
     "host":     "localhost",
     "port":     1433,

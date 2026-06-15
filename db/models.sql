@@ -149,3 +149,25 @@ CREATE TABLE boe_line_items (
         ON UPDATE CASCADE
 );
 GO
+
+
+-- ============================================================
+-- TABLE 3: logs
+-- ============================================================
+CREATE TABLE app_logs (
+    id INT IDENTITY(1,1) NOT NULL,
+    [timestamp] DATETIME2(0) NOT NULL,    
+    [log_level] NVARCHAR(10) NOT NULL,  
+    [logger_name] NVARCHAR(100) NOT NULL, 
+    [message] NVARCHAR(MAX) NOT NULL,    
+    [created_at] DATETIME2(0) NOT NULL DEFAULT GETDATE(), -- DB tracking timestamp
+    
+    CONSTRAINT PK_app_logs PRIMARY KEY CLUSTERED (id ASC)
+);
+
+-- Highly recommended non-clustered indexes for fast querying of log data
+CREATE NONCLUSTERED INDEX IX_app_logs_timestamp 
+ON app_logs ([timestamp] DESC);
+
+CREATE NONCLUSTERED INDEX IX_app_logs_log_level 
+ON app_logs ([log_level]);

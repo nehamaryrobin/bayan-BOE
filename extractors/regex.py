@@ -57,3 +57,9 @@ AWB_MANIFEST_RE = re.compile(r"""
     (?P<awb_serial>\d{8})           # 6. Exactly 8 digits (e.g., 78282945)
     \s*$
 """, re.VERBOSE | re.IGNORECASE)
+
+_DELIVERY_ORDER_RE = re.compile(
+    r'DELIVERY\s+ORDER\s+NO[^\n]*?5\s*'
+    r'(?P<delivery_order>\(.*?\).*?(?:\d{2}-\d{2}-\d{4})?\s*\d+)',
+    re.IGNORECASE | re.DOTALL
+)
