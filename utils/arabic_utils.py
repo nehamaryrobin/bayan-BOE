@@ -3,6 +3,7 @@ import unicodedata
 import arabic_reshaper
 from bidi.algorithm import get_display
 
+
 # Covers standard Arabic (U+0600-06FF) AND Presentation Forms-B (U+FE70-FEFF)
 _AR_RE = re.compile(r'[\u0600-\u06FF\uFE70-\uFEFF]')
 

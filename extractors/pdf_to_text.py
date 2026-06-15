@@ -3,6 +3,7 @@ pdf_to_text.py
 Extracts raw text from each page of a BOE PDF using pdfplumber.
 Returns a list of page strings (one per page).
 """
+
 import pdfplumber
 from app.logger import get_logger
 
@@ -15,8 +16,7 @@ def extract_pages(pdf_path: str) -> list[str]:
     pages = []
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            # ENABLE LAYOUT MODE to preserve column gaps
-            text = page.extract_text(layout=True, x_tolerance=3, y_tolerance=3)
+            text = page.extract_text(layout=True, x_tolerance= 3, y_tolerance= 3)
             if text:
                 pages.append(text)
                 logger.debug(f"Page {i}: extracted {len(text)} characters")
@@ -45,3 +45,4 @@ def extract_words_with_coords(pdf_path: str) -> list[list[dict]]:
                 w["page_no"] = i
             all_pages.append(words)
     return all_pages
+

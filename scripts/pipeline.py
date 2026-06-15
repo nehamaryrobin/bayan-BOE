@@ -14,8 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.logger import get_logger
 from extractors.pdf_to_text import extract_pages
-from extractors.header_extractor import extract_header
-from extractors.line_item_extractor import extract_tabular_groups
+from extractors.header_item_extraction import extract_header
+from extractors.line_item_extraction import extract_tabular_groups
 from db.connection import get_connection
 from db.inserter import insert_boe, is_duplicate
 from utils.file_utils import move_to_processed, move_to_failed
