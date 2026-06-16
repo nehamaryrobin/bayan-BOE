@@ -13,12 +13,13 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.logger import get_logger
-from extractors.pdf_to_text import extract_pages
+from extractors.pdf_to_text import NonNativePdfError, extract_pages
 from extractors.header_item_extraction import extract_header
 from extractors.line_item_extraction import extract_tabular_groups
 from db.connection import get_connection
 from db.inserter import insert_boe, is_duplicate
 from utils.file_utils import move_to_processed, move_to_failed
+import watchdog
 
 logger = get_logger("pipeline")
 
@@ -63,6 +64,10 @@ def process_file(pdf_path: str) -> bool:
         logger.info(f"SUCCESS | file='{filename}' | dec_no='{dec_no}'")
         return True
 
+    except NonNativePdfError as e:
+        logger.error(f"FAILED_NON_NATIVE_PDF | file='{filename}' | error={e}")
+        move_to_failed(pdf_path)
+        return False
     except Exception as e:
         logger.error(f"FAILED | file='{filename}' | error={e}")
         move_to_failed(pdf_path)

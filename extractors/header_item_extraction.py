@@ -61,11 +61,9 @@ _PACKAGES_ROW_RE = re.compile(r"""
     \s*$
 """, re.VERBOSE | re.IGNORECASE)
 
-import re
 
 _AWB_MANIFEST_LINE_RE = re.compile(r"""
     \b
-    
     (?P<awb_prefix>[A-Za-z])\s*  # 1. Single letter (e.g., M or H)
     (?P<awb_no>\d{5,7})\s+  # 2. 5 to 7 digits (AWB number sequence)
     (?P<bl_indicator>B/L|B)\s+ # 3. B/L or BL indicator
@@ -74,6 +72,14 @@ _AWB_MANIFEST_LINE_RE = re.compile(r"""
     (?P<manifest_no>\d{8})  # 6. Exactly 8 digits (Manifest number sequence)
     \b
 """, re.VERBOSE)
+
+_LOOSE_AWB_MANIFEST_RE = re.compile(r"""
+    # Optional AWB Part (e.g., "M 2428") followed by optional "B" or "B/L"
+    (?:(?P<awb>[A-Za-z]\s*\d+)\s+(?:B/L|B)?\s+)?
+    
+    # Manifest Part: Captures long alphanumeric sequences or digits (minimum 6 chars)
+    (?P<manifest>[A-Za-z0-9]{6,25})
+""", re.VERBOSE | re.IGNORECASE)
 
 def _field_failed(field: str, filename: str, dec_no: str) -> None:
     logger.warning(f"FIELD_FAIL | file='{filename}' | dec_no='{dec_no}' | field='{field}'")
@@ -191,34 +197,98 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
 
     # ── Fields 15 & 17: Exported To / AWB & Manifest ─────────────────────────
-    data["EXPORTED_TO_15"]  = None 
-    
+    def _extract_exported_to(lines: list[str]) -> str | None:
+        idx = _find_line(lines, 'EXPORTED TO')
+        if idx < 0:
+            return None
+
+        val_line = _get(lines, idx + 1)
+        if not val_line:
+            return None
+
+        # 1. Find the AWB/Manifest match on this line (either strict or loose)
+        match = _AWB_MANIFEST_LINE_RE.search(val_line)
+        if not match:
+            match = _LOOSE_AWB_MANIFEST_RE.search(val_line)
+
+        if match:
+            # 2. Extract everything in the line until that match (all text on the left)
+            left_text = val_line[:match.start()]
+            cleaned_val = clean(left_text)
+            
+            # Filter out common packages indicator "دﺮﻃ" (Dal Reh Tah) to ensure correct data
+            if cleaned_val and not re.search(r'\u062f\u0631\u0637', cleaned_val):
+                return cleaned_val
+
+        return None
+
+    data["EXPORTED_TO_15"] = _extract_exported_to(lines)
+
+    # STEP 1: Try the Strict Multi-Line Global Search
     awb_manifest_matches = _AWB_MANIFEST_LINE_RE.findall(text)
     
-    awb_list = []
-    manifest_list = []
+    if awb_manifest_matches:
+        awb_list, manifest_list = [], []
+        for match in awb_manifest_matches:
+            prefix = match[0] if match[0] else "M"
+            awb_list.append(f"{prefix} {match[1]}")
+            manifest_list.append(f"{match[3]} - {match[4]}")
+            
+        data["AWB_NO_17A"]      = clean(', '.join(awb_list))
+        data["MANIFEST_NO_17B"] = clean(', '.join(manifest_list))
+
+    else:
+        # STEP 2: FALLBACK - Positional extraction for Corrupted/Misgenerated Formats
+        awb_lbl = _find_line(lines, 'EXPORTED TO', 'MANIF', '17')
+        
+        if awb_lbl != -1:
+            awb_val = _get(lines, awb_lbl + 1)
+            
+            # Split the row by wide gaps to isolate the columns
+            cols = re.split(r'\s{3,}', awb_val.strip())
+            
+            if cols:
+                # Target the absolute right-most block of text
+                target_col = cols[-1] 
+                
+                loose_match = _LOOSE_AWB_MANIFEST_RE.search(target_col)
+                if loose_match:
+                    res = loose_match.groupdict()
+                    data["AWB_NO_17A"]      = clean(res["awb"]) if res["awb"] else None
+                    data["MANIFEST_NO_17B"] = clean(res["manifest"]) if res["manifest"] else None
+                else:
+                    data["AWB_NO_17A"]      = None
+                    data["MANIFEST_NO_17B"] = None
+        else:
+            data["AWB_NO_17A"]      = None
+            data["MANIFEST_NO_17B"] = None
+
+     # ── Field 19: Marks & Numbers ────────────────────
+    marks_idx = _find_line(lines, 'MARKS', '&', 'NUMBERS')
     
-    for match in awb_manifest_matches:
-        # Reconstruct the explicit "M [number]" layout representation
-        prefix = match[0] if match[0] else "M"
-        awb_list.append(f"{prefix} {match[1]}")
-        
-        # Build the manifest identifier string sequence
-        manifest_list.append(f"{match[3]} - {match[4]}")
-        
-    # 3. Join the lists using comma delimeters into the target parameters
-    data["AWB_NO_17A"]      = (', '.join(awb_list)) if awb_list else None
-    data["MANIFEST_NO_17B"] = (', '.join(manifest_list)) if manifest_list else None
+    if marks_idx != -1:
+        marks_lines = []
+        # Iterate through all lines below the header
+        for line in lines[marks_idx + 1:]:
+            # Stop extracting if we hit the boundary noise words
+            if 'ESU' in line or 'TNEGA' in line:
+                break
+            
+            # Only append non-empty lines
+            if line.strip():
+                marks_lines.append(line.strip())
+                
+        # Join the collected lines into a single string and clean it
+        data["MARKS_NUMBERS_19"] = clean(" ".join(marks_lines))
+    else:
+        data["MARKS_NUMBERS_19"] = None
 
-
-     
     # ── Single Value Headers ──────────────────────────────────────────────────
     def _simple_extract(key_1, key_2):
         lbl = _find_line(lines, key_1, key_2)
         return (_get(lines, lbl + 1)) if lbl >= 0 else None
 
     data["PORT_OF_LOADING_18"]   = clean(_simple_extract('PORT OF LOADING', '18'))
-    data["MARKS_NUMBERS_19"]     = clean(_simple_extract('MARKS & NUMBERS', '19'))
     data["PORT_OF_DISCHARGE_20"] = clean(_simple_extract('PORT OF DISCHARGE', '20'))
     data["DESTINATION_21"]       = clean(_simple_extract('DESTINATION', '21'))
     data["CLEARING_AGENT_38"]    = clean(_simple_extract('CLEARING AGENT', '38'))
@@ -266,8 +336,9 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
     # ── Fields 48-52: Duties & Fees ──────────────────────────────────────────
     def _fee(keyword: str, field_no: str) -> float | None:
         idx = _find_line(lines, keyword, field_no)
-        if idx < 0: return None
-        return _search(r'^([\d.]+)', _get(lines, idx))
+        if idx < 0:
+            return None
+        return clean_number(_search(r'^([\d.]+)', _get(lines, idx)))
 
     data["TOTAL_DUTY_48"]    = _fee('TOTAL DUTY',    '48')
     data["VAT_48A"]          = _fee('VAT',           '48A')
@@ -283,6 +354,36 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
     data["INSURED_52"] = clean_number(_search(r'INSURED\s+([\d.]+)', _get(lines, ins_idx))) if ins_idx >= 0 else None
 
 
+   
+    # ── Fields 53-59: Payment & Receipt Information ──────────────────────────
+
+    # 1. Payment Method (Field 53)
+    pm_match = re.search(r"PAYMENT\s+METHOD\s*(?P<val>.{0,50}?)\s*ﻊﻓﺪﻟا\s*ﺔﻘﯾﺮﻃ", text, re.IGNORECASE | re.DOTALL)
+    data["PAYMENT_METHOD_53"] = clean(pm_match.group("val")) if pm_match else None
+
+    # 2. Payment No (Field 54)
+    pn_match = re.search(r"\bNO\.?\s*(?P<val>.{0,50}?)\s*ﻢﻗر\s*54", text, re.IGNORECASE | re.DOTALL)
+    data["PAYMENT_NO_54"]     = clean(pn_match.group("val")) if pn_match else None
+
+    # (Optional) Payment Date (Field 55) - Added for completeness
+    pd_match = re.search(r"\bDATE\s*(?P<val>.{0,50}?)\s*ﺦﯾرﺎﺗ\s*55", text, re.IGNORECASE | re.DOTALL)
+    data["PAYMENT_DATE_55"]   = clean(pd_match.group("val")) if pd_match else None
+
+    # 3. Payment Bank (Field 56)
+    pb_match = re.search(r"\bBANK\s*(?P<val>.{0,50}?)\s*(?:بنك|ﻚﻨﺒﻟا|ﻚﻨﺑ)\s*56", text, re.IGNORECASE | re.DOTALL)
+    data["PAYMENT_BANK_56"] = clean(pb_match.group("val")) if pb_match else None
+
+    # 4. Receipt No (Field 57) 
+    rn_match = re.search(r"RECEIPT\s+NO\.?\s*(?P<val>\d+).*?ﻢﻗر\s*57", text, re.IGNORECASE | re.DOTALL)
+    data["RECEIPT_NO_57"] = clean(rn_match.group("val")) if rn_match else None
+
+    # 5. Receipt Date (Field 58)
+    rd_match = re.search(r"\bDATE\s*(?P<val>.{0,50}?)\s*ﺦﯾرﺎﺗ\s*58", text, re.IGNORECASE | re.DOTALL)
+    data["RECEIPT_DATE_58"]   = clean(rd_match.group("val")) if rd_match else None
+
+    # 6. Receipt Bank (Field 59)
+    rb_match = re.search(r"\bBANK\s*(?P<val>.{0,50}?)\s*(?:بنك|ﻚﻨﺒﻟا|ﻚﻨﺑ)\s*59", text, re.IGNORECASE | re.DOTALL)
+    data["RECEIPT_BANK_59"] = clean(rb_match.group("val")) if rb_match else None
 
 
 

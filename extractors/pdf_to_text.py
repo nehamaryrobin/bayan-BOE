@@ -9,20 +9,40 @@ from app.logger import get_logger
 
 logger = get_logger("pdf_to_text")
 
+
+class NonNativePdfError(Exception):
+    """Raised when a PDF appears to be image/scanned instead of native text-based."""
+
 def extract_pages(pdf_path: str) -> list[str]:
     """
     Open the PDF and return a list of raw text strings, one per page.
+
+    Raises:
+        NonNativePdfError: if the file appears to be a scanned/image PDF
+                           instead of a native text PDF.
     """
     pages = []
     with pdfplumber.open(pdf_path) as pdf:
+        if not pdf.pages:
+            raise ValueError("PDF contains no pages")
+
         for i, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text(layout=True, x_tolerance= 3, y_tolerance= 3)
-            if text:
+            text = page.extract_text(layout=True, x_tolerance=3, y_tolerance=3)
+            has_images = bool(getattr(page, "images", None))
+
+            if text and text.strip():
                 pages.append(text)
                 logger.debug(f"Page {i}: extracted {len(text)} characters")
-            else:
-                logger.debug(f"Page {i}: no text extracted")
-                pages.append("")
+                continue
+
+            if has_images:
+                raise NonNativePdfError(
+                    f"PDF appears to be image/scanned (non-native) on page {i}: "
+                    "no selectable text could be extracted"
+                )
+
+            logger.debug(f"Page {i}: no text extracted")
+            pages.append("")
     return pages
 
 

@@ -37,24 +37,35 @@ _LINE_ITEM_PT2_RE = re.compile(r"""
 
 def _is_stray_text(line: str) -> bool:
     """Returns True if the line is orphaned text (not a main row or header)."""
-    if _LINE_ITEM_PT1_RE.match(line) or _LINE_ITEM_PT2_RE.match(line): return False
-    if re.search(r'(TYPE|VALUE TYPE|ORIGIN|DESCRIPTION|H\.S\.CODE|MARKS & NUMBERS)', line, re.IGNORECASE): return False
-    if re.match(r'^[\d\s.,\-]+$', line): return False
-    return True
-
-def _is_stray_text(line: str) -> bool:
-    """Returns True if the line is orphaned text (not a main row or header)."""
     if _LINE_ITEM_PT1_RE.match(line) or _LINE_ITEM_PT2_RE.match(line): 
         return False
-    walls_re = r'(TYPE|VALUE TYPE|ORIGIN|DESCRIPTION|H\.S\.CODE|MARKS & NUMBERS|WEIGHT|ITEM|PACKAGES|CUSTOMS RESTRICTIONS|AIP|تاءﺎﻔﻋﻹا ﺰﻣر 42|ةرﺎﺿ\.م\.م|نزﻮﻟا|ﻒﻨﺼﻟا|دوﺮﻄﻟا|ﺔﯿﻛﺮﻤﺠﻟا دﻮﯿﻘﻟا)'
+        
+    walls_re = r'(VALUE TYPE|ORIGIN|DESCRIPTION|H\.S\.CODE|MARKS & NUMBERS|WEIGHT|ITEM|PACKAGES|CUSTOMS RESTRICTIONS|AIP|تاءﺎﻔﻋﻹا ﺰﻣر 42|ةرﺎﺿ\.م\.م|نزﻮﻟا|ﻒﻨﺼﻟا|دوﺮﻄﻟا|ﺔﯿﻛﺮﻤﺠﻟا دﻮﯿﻘﻟا)'
     if re.search(walls_re, line, re.IGNORECASE): 
         return False
+        
+    # Check for the word 'TYPE' (case-insensitive)
+    if re.search(r'\bTYPE\b', line, re.IGNORECASE):
+        header_words = r'\b(?:Port|Dec|Value|Income|Type|Qty|Unit|Gross|Net|Rate|Duty|No|Code|Description|Origin|H\.S\.Code)\b'
+        arabic_header_words = r'(عﻮﻨﻟا|عﻮﻧ|ﺬﻔﻨﻤﻟا|نﺎﯿﺒﻟا|ﺦﯾرﺎﺗ|ﻢﻗر|ﺔﻠﻤﻌﻟا|ﺮﻌﺴﻟا|ﺔﻤﯿﻘﻟا|ﺔﯿﻠﺤﻤﻟا|مﻮﺳﺮﻟا|ﻒﻨﺼﻟا|نزﻮﻟا|دوﺮﻄﻟا|ﺔﯿﻛﺮﻤﺠﻟا|دﻮﯿﻘﻟا|تاءﺎﻔﻋﻹا|ﺰﻣر|ةرﺎﺿ|م|م)'
+        cleaned = re.sub(header_words, '', line, flags=re.IGNORECASE)
+        cleaned = re.sub(arabic_header_words, '', cleaned)
+        cleaned = re.sub(r'[\d\s.,\-()\[\]"\'%&/]+', '', cleaned).strip()
+        # If the line contains ONLY header words / noise, it is a header wall
+        if not cleaned:
+            return False
+
     if re.match(r'^[\d\s.,\-]+$', line): 
         return False
+        
     return True
     
 def _clean_desc_fragment(t: str) -> str:
     """Removes the sliced vertical margin artifacts from the text."""
+    # Strip leading/trailing header terms that might get merged from adjacent columns
+    t = re.sub(r'^\s*\bTYPE\b\s*', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\s*\bTYPE\b\s*$', '', t, flags=re.IGNORECASE)
+    
     t = re.sub(r'^(?:درﻮﺘ|وا|ﺨﻤﻟا|ﺺﻠ|ﺴﻤﻟا|ت)\s*', '', t)
     t = re.sub(r'^[\u0600-\u06FF\uFE70-\uFEFF]{1,4}\s+(?=[A-Za-z])', '', t)
     if re.match(r'^[\u0600-\u06FF\uFE70-\uFEFF]{1,4}$', t): return ""
