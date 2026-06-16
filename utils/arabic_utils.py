@@ -36,6 +36,7 @@ def clean_number(value) -> float | None:
     if value is None:
         return None
     text = str(value).strip().replace(",", "")
+    text = re.sub(r'[^\d.-]', '', text)
     if not text:
         return None
     try:

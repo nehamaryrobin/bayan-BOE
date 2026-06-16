@@ -1,6 +1,6 @@
 import re
 from app.logger import get_logger
-from extractors.pdf_to_text import extract_pages
+from extractors.pdf_to_text import extract_pages2
 from utils.arabic_utils import clean, clean_number
 
 logger = get_logger("header_extractor")
@@ -18,15 +18,28 @@ _BOE_VALUE_LINE_RE = re.compile(r"""
     (?P<dec_no>\d{6,8})                                 # 5. Dec Number (Integers)
 """, re.VERBOSE | re.IGNORECASE | re.DOTALL)
 
+_BOE_EXPORT_VALUE_LINE_RE = re.compile(r"""
+    ^\s*
+    (?P<port_type>[\u0600-\u06FF\uFE70-\uFEFF\w\t /–-]+?)[ \t]{2,}
+    (?P<dec_type>Export\s+[\u0600-\u06FF\uFE70-\uFEFF]+?|Export|[\u0600-\u06FF\uFE70-\uFEFF]+?)[ \t]{2,}
+    (?P<gregorian_date>\d{2}-\d{2}-\d{4})[ \t]+
+    (?:(?P<hijri_date>\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4})[ \t]+)?
+    [a-zA-Z \t]*(?P<dec_no>\d{6,15})
+    \s*$
+""", re.VERBOSE | re.IGNORECASE | re.MULTILINE)
+
 
 # ── Fields 5-7: Delivery / Importer / Net Weight ─────────────────────────
 
 _DELIVERY_ORDER_LINE_RE = re.compile(r"""
     ^\s*
-    (?:(?P<unload_date>\d{2}-\d{2}-\d{4})\s*/\s*)?   # 1. OPTIONAL: Unload Date + Slash (e.g., "03-11-1447 /")
-    (?P<net_weight>[\d,]+(?:\.\d+)?)\s+              # 2. MANDATORY: Net Weight (Matches integers like "1771" or floats like "33.5")
-    (?P<importer_name>.+?)\s+                        # 3. MANDATORY: Company Description Text (Lazy match up to the container type bracket)
-    (?P<delivery_order>\((?:FCL|LCL)\).+?\s+\d{2}-\d{2}-\d{4}\s+\d+)
+    (?:(?P<unload_date>\d{2}-\d{2}-\d{4})\s*/\s*)?          # 1. OPTIONAL: Unload Date
+    (?P<net_weight>[\d,]+(?:\.\d+)?(?:\s*kgs)?)\s{2,}       # 2. MANDATORY: Net Weight (optionally with 'kgs' unit)
+    (?P<importer_name>.+?)                                  # 3. MANDATORY: Importer Name
+    (?:
+        \s{2,}
+        (?P<delivery_order>(?:\((?:FCL|LCL)\)\s*)?.+?\s+\d{2}-\d{2}-\d{4}\s+.+)
+    )?
     \s*$                                           
 """, re.VERBOSE | re.IGNORECASE)
 
@@ -107,7 +120,7 @@ def _search(pattern: str, text: str, flags=re.MULTILINE) -> str | None:
 
 def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
-    pages = extract_pages(pdf_or_pages) if isinstance(pdf_or_pages, str) else list(pdf_or_pages)
+    pages = extract_pages2(pdf_or_pages) if isinstance(pdf_or_pages, str) else list(pdf_or_pages)
     lines = [l for l in pages[0].split('\n') if l.strip()]
     text  = '\n'.join(lines)
 
@@ -117,6 +130,8 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
     # ── Fields 1-4: DEC_NO / DEC_DATE / DEC_TYPE / PORT_TYPE ───────────────
     match = _BOE_VALUE_LINE_RE.search(text)
+    if not match:
+        match = _BOE_EXPORT_VALUE_LINE_RE.search(text)
     if not match:
         raise ValueError(f"[{filename}] Could not extract DEC_NO and header info")
     
@@ -186,12 +201,20 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
     # ── Fields 14-16: Flight / TIN / Packages ────────────────────────────────
     pkg_lbl = _find_line(lines, 'NO.OF PACKAGES', 'TIN NO')
+    if pkg_lbl < 0:
+        pkg_lbl = _find_line(lines, 'NO.OF PACKAGES')
     pkg_val = _get(lines, pkg_lbl + 1)
     
     cols_14_16 = re.split(r'\s{3,}', pkg_val.strip())
     
     data["PACKAGES_16"]         = clean_number(cols_14_16[0]) if len(cols_14_16) > 0 else None
-    data["TIN_NO_12A"]          = clean(cols_14_16[1]) if len(cols_14_16) > 1 else None
+    
+    tin_val = clean(cols_14_16[1]) if len(cols_14_16) > 1 else None
+    if tin_val and not re.match(r'^\d+$', tin_val.replace(" ", "")):
+        data["TIN_NO_12A"] = None
+    else:
+        data["TIN_NO_12A"] = tin_val
+        
     data["VOYAGE_FLIGHT_NO_14"] = clean(cols_14_16[2]) if len(cols_14_16) > 2 else None
 
 
