@@ -29,7 +29,7 @@ def process_file(pdf_path: str) -> bool:
     Process a single BOE PDF file end-to-end.
     Returns True on success, False on failure.
     """
-    filename = os.path.basename(pdf_path)
+    filename = os.path.splitext(os.path.basename(pdf_path))[0]
     logger.info(f"START | file='{filename}'")
 
     conn = None

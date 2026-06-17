@@ -55,7 +55,7 @@ INSERT INTO boe_line_items (
     d_rate_29, income_type_30, total_duty_31,
     pkg_qty_32, pkg_type_33, item_qty_34, item_unit_35,
     net_weight_36, gross_weight_37, aip_no_37a, aip_duty_37b,
-    customs_restrictions_agency_40, customs_release_ref_41
+    customs_restrictions_agency_40, customs_release_ref_41, exemption_code_42
 ) VALUES (
     %(DEC_NO)s, %(PDF_FILENAME)s, %(ITEM_NO)s,
     %(HS_CODE_22)s, %(GOODS_DESCRIPTION_23)s, %(ORIGIN_24)s,
@@ -64,7 +64,7 @@ INSERT INTO boe_line_items (
     %(TOTAL_DUTY_31)s, %(PKG_QTY_32)s, %(PKG_TYPE_33)s,
     %(ITEM_QTY_34)s, %(ITEM_UNIT_35)s, %(NET_WEIGHT_36)s,
     %(GROSS_WEIGHT_37)s, %(AIP_NO_37A)s, %(AIP_DUTY_37B)s,
-    %(CUSTOMS_RESTRICTIONS_AGENCY_40)s, %(CUSTOMS_RELEASE_REF_41)s
+    %(CUSTOMS_RESTRICTIONS_AGENCY_40)s, %(CUSTOMS_RELEASE_REF_41)s, %(EXEMPTION_CODE_42)s
 )
 """
 

@@ -23,7 +23,7 @@ _LINE_ITEM_PT1_RE = re.compile(r"""
 
 _LINE_ITEM_PT2_RE = re.compile(r"""
     ^.*?                                             
-    (?:(?P<exemption_code>\d{6,12})\s+)?                              
+    (?:(?P<exemption_code>\d{1,12})\s+)?                              
     (?:(?P<aip_duty>[\d,]+\.\d+)\s+(?P<aip_no>\d+)\s+)?               
     (?P<gross_weight>[\d,]+\.\d+)\s+                                  
     (?P<net_weight>[\d,]+\.\d+)\s+                                    
@@ -217,7 +217,7 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
             
         row.update({
             "DEC_NO": dec_no,
-            "PDF_FILENAME": filename
+            "PDF_FILENAME": filename.rsplit('.', 1)[0]
         })
         items.append(row)
 

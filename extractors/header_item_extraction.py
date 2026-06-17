@@ -1,11 +1,12 @@
 import re
 from app.logger import get_logger
-from extractors.pdf_to_text import extract_pages2
+from extractors.pdf_to_text import extract_pages2, extract_pages
 from utils.arabic_utils import clean, clean_number
 
 logger = get_logger("header_extractor")
 
 _AR = r'[\u0600-\u06FF\uFE70-\uFEFF]'
+
 
 # ── Fields 1-4: DEC_NO / DEC_DATE / DEC_TYPE / PORT_TYPE ───────────────
 
@@ -13,8 +14,8 @@ _BOE_VALUE_LINE_RE = re.compile(r"""
     Custom\s+Declaration\s*
     (?P<port_type>جوي|يﻮﺟ|بري|يرب|بحري|يرحب)?\s* # 1. Optional Port Type 
     (?P<dec_type>[\u0600-\u06FF\uFE70-\uFEFF\w\s]+?)\s* # 2. Dec Type (Lazy match Arabic text)
-    (?P<gregorian_date>\d{2}-\d{2}-\d{4})\s+            # 3. Gregorian Date
-    (?P<hijri_date>\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4})\s+ # 4. Hijri Date
+    (?:(?P<date1>\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2})\s+)? # 3. Optional First Date
+    (?P<date2>\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2})\s+ # 4. Mandatory Second Date
     (?P<dec_no>\d{6,8})                                 # 5. Dec Number (Integers)
 """, re.VERBOSE | re.IGNORECASE | re.DOTALL)
 
@@ -46,10 +47,12 @@ _DELIVERY_ORDER_LINE_RE = re.compile(r"""
 
 _CARRIER_ROW_RE = re.compile(r"""
     ^\s*
-    (?P<gross_weight>[\d,]+(?:\.\d+)?)\s+                                       # 1. MANDATORY: Gross Weight (Matches integers like "1771" or floats like "33.5")
-    (?:(?P<intercessor>[\u0600-\u06FF\uFE70-\uFEFF\w\s()./–-]+?)(?=\s{3,}))?    # 2. OPTIONAL: Intercessor Co (Field 9) - Matches Arabic text
-    \s{3,}
-    (?P<carrier>.+)?                                                            # 3. OPTIONAL: Carrier/Captain/Driver (Field 8) - Matches remaining text
+    (?P<gross_weight>[\d,]+(?:\.\d+)?)\s{2,}
+    (?P<intercessor>[\u0600-\u06FF\uFE70-\uFEFF\w\s()./–-]+?)                  # 1. Intercessor Co (Field 9) - Matches Arabic text
+    (?:
+        \s{2,}
+        (?P<carrier>.+)                                                         # 2. Carrier/Captain/Driver (Field 8) - Matches remaining text
+    )?
     \s*$
 """, re.VERBOSE | re.IGNORECASE)
 
@@ -58,9 +61,8 @@ _MEASUREMENT_ROW_RE = re.compile(r"""
     ^\s*
     # 1. OPTIONAL: Measurement (Field 13) - Arabic/English text ending before the big gap
     (?:(?P<measurement>[\u0600-\u06FF\uFE70-\uFEFF\w\s()./–-]+?)(?=\s{3,}))?
-    \s{3,} 
-    # 2. MANDATORY: Commercial Registration No (Field 12) - Enforces exactly 10 digits starting with 7
-    (?P<commercial_reg>\b7\d{9}\b)\s+
+    # 2. MANDATORY: Commercial Registration No (Field 12) - Enforces exactly 10 
+    (?P<commercial_reg>\d{10}\b)\s+
     # 3. OPTIONAL: Carrier Name (Field 11) - Captures any remaining text at the end of the row
     (?P<carrier_name>.+)?
     \s*$
@@ -120,33 +122,55 @@ def _search(pattern: str, text: str, flags=re.MULTILINE) -> str | None:
 
 def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
-    pages = extract_pages2(pdf_or_pages) if isinstance(pdf_or_pages, str) else list(pdf_or_pages)
-    lines = [l for l in pages[0].split('\n') if l.strip()]
-    text  = '\n'.join(lines)
+    pages1 = extract_pages(pdf_or_pages) if isinstance(pdf_or_pages, str) else list(pdf_or_pages)
+    lines1 = [l for l in pages1[0].split('\n') if l.strip()]
+    text1  = '\n'.join(lines1) 
+
+    pages2 = extract_pages2(pdf_or_pages) if isinstance(pdf_or_pages, str) else list(pdf_or_pages)
+    lines2 = [l for l in pages2[0].split('\n') if l.strip()]
+    text2  = '\n'.join(lines2) 
 
     data = {}
-    data["PDF_FILENAME"] = filename
+    data["PDF_FILENAME"] = filename.rsplit('.', 1)[0]
 
 
     # ── Fields 1-4: DEC_NO / DEC_DATE / DEC_TYPE / PORT_TYPE ───────────────
-    match = _BOE_VALUE_LINE_RE.search(text)
+    match = _BOE_VALUE_LINE_RE.search(text2)
     if not match:
-        match = _BOE_EXPORT_VALUE_LINE_RE.search(text)
+        match = _BOE_EXPORT_VALUE_LINE_RE.search(text2)
     if not match:
         raise ValueError(f"[{filename}] Could not extract DEC_NO and header info")
     
     header = match.groupdict()
     data["DEC_NO"]               = clean(header.get("dec_no"))
-    data["DEC_DATE_GREGORIAN_2"] = clean(header.get("gregorian_date"))
-    data["DEC_DATE_HIJRI_2"]     = clean(header.get("hijri_date"))
     data["DEC_TYPE_3"]           = clean(header.get("dec_type"))
     data["PORT_TYPE_4"]          = clean(header.get("port_type"))
+
+    # Parse dates flexibly (supporting either 1 or 2 dates)
+    gregorian = clean(header.get("gregorian_date"))
+    hijri = clean(header.get("hijri_date"))
+    if "date1" in header or "date2" in header:
+        d1 = header.get("date1")
+        d2 = header.get("date2")
+        for d in [d1, d2]:
+            if not d:
+                continue
+            year_match = re.search(r'\b\d{4}\b', d)
+            if year_match:
+                year = int(year_match.group(0))
+                if year >= 2000:
+                    gregorian = clean(d)
+                else:
+                    hijri = clean(d)
+    
+    data["DEC_DATE_GREGORIAN_2"] = gregorian
+    data["DEC_DATE_HIJRI_2"]     = hijri
 
 
 
     # ── Fields 5-7: Delivery / Importer / Net Weight ─────────────────────────
-    deliv_lbl = _find_line(lines, 'DELIVERY ORDER NO', '5')
-    deliv_val = _get(lines, deliv_lbl + 1)
+    deliv_lbl = _find_line(lines2, 'DELIVERY ORDER NO', '5')
+    deliv_val = _get(lines2, deliv_lbl + 1)
 
     line_match = _DELIVERY_ORDER_LINE_RE.match(deliv_val)
 
@@ -166,8 +190,8 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
 
     # ── Fields 8-10: Carrier / Intercessor / Gross Weight ────────────────────
-    carrier_lbl = _find_line(lines, 'GROSS WEIGHT', 'INTERCESSOR')
-    carrier_val = _get(lines, carrier_lbl + 1)
+    carrier_lbl = _find_line(lines2, 'GROSS WEIGHT', 'INTERCESSOR')
+    carrier_val = _get(lines2, carrier_lbl + 1)
 
     carrier_match = _CARRIER_ROW_RE.match(carrier_val)
 
@@ -184,26 +208,34 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
 
     # ── Fields 11-13: Carrier Name / Commercial Reg / Measurement ────────────
-    meas_lbl = _find_line(lines, 'MEASUREMENT', 'COMMERCIAL REG')
-    meas_val = _get(lines, meas_lbl + 1)
+    meas_lbl = _find_line(lines1, 'MEASUREMENT', 'COMMERCIAL', 'NAME')
+    meas_val = _get(lines1, meas_lbl + 1)
     
-    meas_match = _MEASUREMENT_ROW_RE.match(meas_val)
-    
-    if meas_match:
-        res = meas_match.groupdict()
-        data["MEASUREMENT_13"]       = clean(res.get("measurement"))
-        data["COMMERCIAL_REG_NO_12"] = clean(res.get("commercial_reg"))
-        data["CARRIER_NAME_11"]      = clean(res.get("carrier_name"))
+    reg_match = re.search(r'\b\d{10}(?:\s*[\/\\\-]+\s*\d{10})*\b', meas_val)
+    if reg_match:
+        data["COMMERCIAL_REG_NO_12"] = reg_match.group(0).replace(" ", "")
+        
+        # Extract Measurement (left of the 10 digits)
+        left_part = meas_val[:reg_match.start()].strip()
+        cleaned_meas = clean(left_part)
+        if cleaned_meas and "الناقلة" not in cleaned_meas and "اﻟﻨﺎﻗﻠﺔ" not in cleaned_meas:
+            data["MEASUREMENT_13"] = cleaned_meas
+        else:
+            data["MEASUREMENT_13"] = None
+            
+        # Extract Carrier Name (right of the 10 digits)
+        right_part = meas_val[reg_match.end():].strip()
+        data["CARRIER_NAME_11"] = clean(right_part)
     else:
         data["MEASUREMENT_13"]       = None
         data["COMMERCIAL_REG_NO_12"] = None
         data["CARRIER_NAME_11"]      = None
 
     # ── Fields 14-16: Flight / TIN / Packages ────────────────────────────────
-    pkg_lbl = _find_line(lines, 'NO.OF PACKAGES', 'TIN NO')
+    pkg_lbl = _find_line(lines1, 'NO.OF PACKAGES', 'TIN NO')
     if pkg_lbl < 0:
-        pkg_lbl = _find_line(lines, 'NO.OF PACKAGES')
-    pkg_val = _get(lines, pkg_lbl + 1)
+        pkg_lbl = _find_line(lines1, 'NO.OF PACKAGES')
+    pkg_val = _get(lines1, pkg_lbl + 1)
     
     cols_14_16 = re.split(r'\s{3,}', pkg_val.strip())
     
@@ -220,6 +252,44 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
 
     # ── Fields 15 & 17: Exported To / AWB & Manifest ─────────────────────────
+    def _parse_awb_manifest(text_block: str) -> tuple[str | None, str | None, int | None]:
+        """
+        Parses AWB number and Manifest number from a given text block.
+        Returns a tuple: (awb_no, manifest_no, match_start_index)
+        """
+        if not text_block:
+            return None, None, None
+
+        # 1. Try strict regex first
+        strict_match = _AWB_MANIFEST_LINE_RE.search(text_block)
+        if strict_match:
+            res = strict_match.groupdict()
+            prefix = res.get("awb_prefix") if res.get("awb_prefix") else "M"
+            awb = f"{prefix} {res.get('awb_no')}"
+            manifest = f"{res.get('manifest_prefix')} - {res.get('manifest_no')}"
+            return clean(awb), clean(manifest), strict_match.start()
+
+        # 2. Try positional groups (2 or 4 groups)
+        parts = text_block.split()
+        if len(parts) == 2:
+            start_idx = text_block.find(parts[0])
+            return clean(parts[0]), clean(parts[1]), start_idx
+        elif len(parts) == 4:
+            start_idx = text_block.find(parts[0])
+            prefix = parts[0] if len(parts[0]) == 1 and parts[0].isalpha() else ""
+            awb_val = f"{prefix} {parts[1]}".strip() if prefix else parts[1]
+            return clean(awb_val), clean(parts[3]), start_idx
+
+        # 3. Try loose regex match
+        loose_match = _LOOSE_AWB_MANIFEST_RE.search(text_block)
+        if loose_match:
+            res = loose_match.groupdict()
+            awb = res.get("awb")
+            manifest = res.get("manifest")
+            return clean(awb) if awb else None, clean(manifest) if manifest else None, loose_match.start()
+
+        return None, None, None
+
     def _extract_exported_to(lines: list[str]) -> str | None:
         idx = _find_line(lines, 'EXPORTED TO')
         if idx < 0:
@@ -229,14 +299,21 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
         if not val_line:
             return None
 
-        # 1. Find the AWB/Manifest match on this line (either strict or loose)
-        match = _AWB_MANIFEST_LINE_RE.search(val_line)
-        if not match:
-            match = _LOOSE_AWB_MANIFEST_RE.search(val_line)
+        # Split the row by wide gaps to isolate the columns
+        cols = re.split(r'\s{3,}', val_line.strip())
+        if not cols:
+            return None
 
-        if match:
-            # 2. Extract everything in the line until that match (all text on the left)
-            left_text = val_line[:match.start()]
+        # Target the absolute right-most block of text (which contains the AWB/Manifest)
+        target_col = cols[-1]
+        target_start = val_line.find(target_col)
+        
+        # Parse AWB/Manifest in target_col
+        _, _, match_idx = _parse_awb_manifest(target_col)
+        
+        if match_idx is not None:
+            # Slices everything before the start of the AWB/Manifest portion
+            left_text = val_line[:target_start + match_idx]
             cleaned_val = clean(left_text)
             
             # Filter out common packages indicator "دﺮﻃ" (Dal Reh Tah) to ensure correct data
@@ -245,10 +322,10 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
         return None
 
-    data["EXPORTED_TO_15"] = _extract_exported_to(lines)
+    data["EXPORTED_TO_15"] = _extract_exported_to(lines1)
 
     # STEP 1: Try the Strict Multi-Line Global Search
-    awb_manifest_matches = _AWB_MANIFEST_LINE_RE.findall(text)
+    awb_manifest_matches = _AWB_MANIFEST_LINE_RE.findall(text1)
     
     if awb_manifest_matches:
         awb_list, manifest_list = [], []
@@ -262,10 +339,10 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
     else:
         # STEP 2: FALLBACK - Positional extraction for Corrupted/Misgenerated Formats
-        awb_lbl = _find_line(lines, 'EXPORTED TO', 'MANIF', '17')
+        awb_lbl = _find_line(lines1, 'EXPORTED TO', 'MANIF', '17')
         
         if awb_lbl != -1:
-            awb_val = _get(lines, awb_lbl + 1)
+            awb_val = _get(lines1, awb_lbl + 1)
             
             # Split the row by wide gaps to isolate the columns
             cols = re.split(r'\s{3,}', awb_val.strip())
@@ -273,26 +350,20 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
             if cols:
                 # Target the absolute right-most block of text
                 target_col = cols[-1] 
-                
-                loose_match = _LOOSE_AWB_MANIFEST_RE.search(target_col)
-                if loose_match:
-                    res = loose_match.groupdict()
-                    data["AWB_NO_17A"]      = clean(res["awb"]) if res["awb"] else None
-                    data["MANIFEST_NO_17B"] = clean(res["manifest"]) if res["manifest"] else None
-                else:
-                    data["AWB_NO_17A"]      = None
-                    data["MANIFEST_NO_17B"] = None
+                awb_val_extracted, manifest_val_extracted, _ = _parse_awb_manifest(target_col)
+                data["AWB_NO_17A"] = awb_val_extracted
+                data["MANIFEST_NO_17B"] = manifest_val_extracted
         else:
             data["AWB_NO_17A"]      = None
             data["MANIFEST_NO_17B"] = None
 
      # ── Field 19: Marks & Numbers ────────────────────
-    marks_idx = _find_line(lines, 'MARKS', '&', 'NUMBERS')
+    marks_idx = _find_line(lines1, 'MARKS', '&', 'NUMBERS')
     
     if marks_idx != -1:
         marks_lines = []
         # Iterate through all lines below the header
-        for line in lines[marks_idx + 1:]:
+        for line in lines1[marks_idx + 1:]:
             # Stop extracting if we hit the boundary noise words
             if 'ESU' in line or 'TNEGA' in line:
                 break
@@ -308,31 +379,36 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
     # ── Single Value Headers ──────────────────────────────────────────────────
     def _simple_extract(key_1, key_2):
-        lbl = _find_line(lines, key_1, key_2)
-        return (_get(lines, lbl + 1)) if lbl >= 0 else None
+        lbl = _find_line(lines1, key_1, key_2)
+        return (_get(lines1, lbl + 1)) if lbl >= 0 else None
 
     data["PORT_OF_LOADING_18"]   = clean(_simple_extract('PORT OF LOADING', '18'))
     data["PORT_OF_DISCHARGE_20"] = clean(_simple_extract('PORT OF DISCHARGE', '20'))
     data["DESTINATION_21"]       = clean(_simple_extract('DESTINATION', '21'))
-    data["CLEARING_AGENT_38"]    = clean(_simple_extract('CLEARING AGENT', '38'))
+    data["CLEARING_AGENT_38"]    = clean(_simple_extract('CLEARING AGENT', '38'))    #>>>>>>
 
-    data["UNIFIED_CUSTOMS_CODE_43"] = _search(r'\b(249\d{9,}|951\d{8,})\b', text)
+    data["UNIFIED_CUSTOMS_CODE_43"] = _search(r'\b(249\d{9,}|951\d{8,})\b', text2)   #>>>>>>
 
-    aeo_lbl = _find_line(lines, 'GCC AEO Code', '44')
-    aeo_val = next((_get(lines, aeo_lbl + i) for i in range(1, 6) if re.match(r'^\d{7}$', _get(lines, aeo_lbl + i))), None)
+    #scan upto 5 lines, retrive a 7 digit integer
+    aeo_lbl = _find_line(lines1, 'GCC AEO Code', '44')
+    limit = _find_line(lines1, 'Other Remarks', '45')
+    if limit < 0:
+        limit = len(lines1)
+
+    aeo_val = next((_get(lines1, aeo_lbl + i) for i in range(1, 6) if aeo_lbl + i < limit and re.match(r'^\d{7}$', _get(lines1, aeo_lbl + i))), None)
     data["GCC_AEO_CODE_44"] = (aeo_val)
         
-    lic_lbl = _find_line(lines, 'LICENCE NO', '39')
-    licence_num = next((_get(lines, lic_lbl + i) for i in range(1, 6) if re.match(r'^\d{4}$', _get(lines, lic_lbl + i))), None)
-    licence_arabic = next((_get(lines, lic_lbl + i) for i in range(1, 6) if re.search(_AR, _get(lines, lic_lbl + i)) and not re.match(r'^\d', _get(lines, lic_lbl + i))), None)
+    lic_lbl = _find_line(lines1, 'LICENCE NO', '39')
+    licence_num = next((_get(lines1, lic_lbl + i) for i in range(1, 6) if lic_lbl + i < limit and re.match(r'^\d{4}$', _get(lines1, lic_lbl + i))), None)
+    licence_arabic = next((_get(lines1, lic_lbl + i) for i in range(1, 6) if lic_lbl + i < limit and re.search(_AR, _get(lines1, lic_lbl + i)) and not re.match(r'^\d', _get(lines1, lic_lbl + i))), None)
     
     data["LICENCE_NO_39"] = (f"{(licence_arabic)} {licence_num}") if licence_arabic and licence_num else licence_num
    
 
     # ── Field 45: OTHER_REMARKS ───────────────────────────────────────────────
-    rem_idx = _find_line(lines, 'Other Remarks', '45')
+    rem_idx = _find_line(lines2, 'Other Remarks', '45')
     if rem_idx >= 0:
-        rem_val = _get(lines, rem_idx + 1)
+        rem_val = _get(lines2, rem_idx + 1)
         # Guard: If the next line is the EXIT PORT label, the remarks are empty
         if 'EXIT PORT' in rem_val or '46' in rem_val:
             data["OTHER_REMARKS_45"] = None
@@ -342,9 +418,9 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
         data["OTHER_REMARKS_45"] = None
 
     # ── Field 46: EXIT_PORT ───────────────────────────────────────────────────
-    exit_idx = _find_line(lines, 'EXIT PORT', '46')
+    exit_idx = _find_line(lines1, 'EXIT PORT', '46')
     if exit_idx >= 0:
-        exit_val = _get(lines, exit_idx + 1)
+        exit_val = _get(lines1, exit_idx + 1)
         # Guard: If the next line is the QR Code label, the exit port is empty
         if 'QR Code' in exit_val or '47' in exit_val or 'ﺔﻌﯾﺮﺴﻟا' in exit_val:
             data["EXIT_PORT_46"] = None
@@ -358,10 +434,10 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
 
     # ── Fields 48-52: Duties & Fees ──────────────────────────────────────────
     def _fee(keyword: str, field_no: str) -> float | None:
-        idx = _find_line(lines, keyword, field_no)
+        idx = _find_line(lines1, keyword, field_no)
         if idx < 0:
             return None
-        return clean_number(_search(r'^([\d.]+)', _get(lines, idx)))
+        return clean_number(_search(r'^([\d.]+)', _get(lines1, idx)))
 
     data["TOTAL_DUTY_48"]    = _fee('TOTAL DUTY',    '48')
     data["VAT_48A"]          = _fee('VAT',           '48A')
@@ -370,42 +446,42 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
     data["HANDLING_49"]      = _fee('HANDLING',      '49')
     data["OTHER_CHARGES_50"] = _fee('OTHER CHARGES', '50')
 
-    def_idx = _find_line(lines, 'DEFINITE', '51')
-    data["DEFINITE_51"] = clean_number(_search(r'DEFINITE\s+([\d.]+)', _get(lines, def_idx))) if def_idx >= 0 else None
+    def_idx = _find_line(lines1, 'DEFINITE', '51')
+    data["DEFINITE_51"] = clean_number(_search(r'DEFINITE\s+([\d.]+)', _get(lines1, def_idx))) if def_idx >= 0 else None
 
-    ins_idx = _find_line(lines, 'INSURED', '52')
-    data["INSURED_52"] = clean_number(_search(r'INSURED\s+([\d.]+)', _get(lines, ins_idx))) if ins_idx >= 0 else None
+    ins_idx = _find_line(lines1, 'INSURED', '52')
+    data["INSURED_52"] = clean_number(_search(r'INSURED\s+([\d.]+)', _get(lines1, ins_idx))) if ins_idx >= 0 else None
 
 
    
     # ── Fields 53-59: Payment & Receipt Information ──────────────────────────
 
     # 1. Payment Method (Field 53)
-    pm_match = re.search(r"PAYMENT\s+METHOD\s*(?P<val>.{0,50}?)\s*ﻊﻓﺪﻟا\s*ﺔﻘﯾﺮﻃ", text, re.IGNORECASE | re.DOTALL)
+    pm_match = re.search(r"PAYMENT\s+METHOD\s*(?P<val>.{0,50}?)\s*ﻊﻓﺪﻟا\s*ﺔﻘﯾﺮﻃ", text1, re.IGNORECASE | re.DOTALL)
     data["PAYMENT_METHOD_53"] = clean(pm_match.group("val")) if pm_match else None
 
     # 2. Payment No (Field 54)
-    pn_match = re.search(r"\bNO\.?\s*(?P<val>.{0,50}?)\s*ﻢﻗر\s*54", text, re.IGNORECASE | re.DOTALL)
+    pn_match = re.search(r"\bNO\.?\s*(?P<val>.{0,50}?)\s*ﻢﻗر\s*54", text1, re.IGNORECASE | re.DOTALL)
     data["PAYMENT_NO_54"]     = clean(pn_match.group("val")) if pn_match else None
 
     # (Optional) Payment Date (Field 55) - Added for completeness
-    pd_match = re.search(r"\bDATE\s*(?P<val>.{0,50}?)\s*ﺦﯾرﺎﺗ\s*55", text, re.IGNORECASE | re.DOTALL)
+    pd_match = re.search(r"\bDATE\s*(?P<val>.{0,50}?)\s*ﺦﯾرﺎﺗ\s*55", text1, re.IGNORECASE | re.DOTALL)
     data["PAYMENT_DATE_55"]   = clean(pd_match.group("val")) if pd_match else None
 
     # 3. Payment Bank (Field 56)
-    pb_match = re.search(r"\bBANK\s*(?P<val>.{0,50}?)\s*(?:بنك|ﻚﻨﺒﻟا|ﻚﻨﺑ)\s*56", text, re.IGNORECASE | re.DOTALL)
+    pb_match = re.search(r"\bBANK\s*(?P<val>.{0,50}?)\s*(?:بنك|ﻚﻨﺒﻟا|ﻚﻨﺑ)\s*56", text1, re.IGNORECASE | re.DOTALL)
     data["PAYMENT_BANK_56"] = clean(pb_match.group("val")) if pb_match else None
 
     # 4. Receipt No (Field 57) 
-    rn_match = re.search(r"RECEIPT\s+NO\.?\s*(?P<val>\d+).*?ﻢﻗر\s*57", text, re.IGNORECASE | re.DOTALL)
+    rn_match = re.search(r"RECEIPT\s+NO\.?\s*(?P<val>\d+).*?ﻢﻗر\s*57", text1, re.IGNORECASE | re.DOTALL)
     data["RECEIPT_NO_57"] = clean(rn_match.group("val")) if rn_match else None
 
     # 5. Receipt Date (Field 58)
-    rd_match = re.search(r"\bDATE\s*(?P<val>.{0,50}?)\s*ﺦﯾرﺎﺗ\s*58", text, re.IGNORECASE | re.DOTALL)
+    rd_match = re.search(r"\bDATE\s*(?P<val>.{0,50}?)\s*ﺦﯾرﺎﺗ\s*58", text1, re.IGNORECASE | re.DOTALL)
     data["RECEIPT_DATE_58"]   = clean(rd_match.group("val")) if rd_match else None
 
     # 6. Receipt Bank (Field 59)
-    rb_match = re.search(r"\bBANK\s*(?P<val>.{0,50}?)\s*(?:بنك|ﻚﻨﺒﻟا|ﻚﻨﺑ)\s*59", text, re.IGNORECASE | re.DOTALL)
+    rb_match = re.search(r"\bBANK\s*(?P<val>.{0,50}?)\s*(?:بنك|ﻚﻨﺒﻟا|ﻚﻨﺑ)\s*59", text2, re.IGNORECASE | re.DOTALL)
     data["RECEIPT_BANK_59"] = clean(rb_match.group("val")) if rb_match else None
 
 
