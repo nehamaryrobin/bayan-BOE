@@ -3,7 +3,6 @@ inserter.py
 Inserts BOE header + line items into SQL Server within a single transaction.
 Uses pymssql. NVARCHAR handles Arabic/Unicode natively.
 """
-import pymssql
 from app.logger import get_logger
 
 logger = get_logger("db.inserter")

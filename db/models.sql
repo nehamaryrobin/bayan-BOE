@@ -26,44 +26,44 @@ CREATE TABLE boe_header (
     pdf_filename                NVARCHAR(512)   NOT NULL,
 
     -- Declaration info
-    dec_date_hijri_2            NVARCHAR(20)    NULL,
-    dec_date_gregorian_2        NVARCHAR(20)    NULL,
-    dec_type_3                  NVARCHAR(255)   NULL,
-    port_type_4                 NVARCHAR(100)   NULL,
+    dec_date_hijri_2            NVARCHAR(MAX)    NULL,
+    dec_date_gregorian_2        NVARCHAR(MAX)    NULL,
+    dec_type_3                  NVARCHAR(MAX)   NULL,
+    port_type_4                 NVARCHAR(MAX)   NULL,
 
     -- Delivery & parties
-    delivery_order_no_5         NVARCHAR(255)   NULL,
-    importer_exporter_6         NVARCHAR(512)   NULL,
-    unload_date_7a              NVARCHAR(20)    NULL,
+    delivery_order_no_5         NVARCHAR(MAX)   NULL,
+    importer_exporter_6         NVARCHAR(MAX)   NULL,
+    unload_date_7a              NVARCHAR(MAX)    NULL,
     net_weight_7b               DECIMAL(12,3)   NULL,
-    carrier_captain_driver_8    NVARCHAR(512)   NULL,
-    intercessor_co_9            NVARCHAR(512)   NULL,
+    carrier_captain_driver_8    NVARCHAR(MAX)   NULL,
+    intercessor_co_9            NVARCHAR(MAX)   NULL,
     gross_weight_10             DECIMAL(12,3)   NULL,
-    carrier_name_11             NVARCHAR(512)   NULL,
+    carrier_name_11             NVARCHAR(MAX)   NULL,
 
     -- Registration & tax
-    commercial_reg_no_12        NVARCHAR(100)   NULL,
-    tin_no_12a                  NVARCHAR(100)   NULL,
+    commercial_reg_no_12        NVARCHAR(MAX)   NULL,
+    tin_no_12a                  NVARCHAR(MAX)   NULL,
 
     -- Shipment details
-    measurement_13              NVARCHAR(100)   NULL,
-    voyage_flight_no_14         NVARCHAR(100)   NULL,
-    exported_to_15              NVARCHAR(255)   NULL,
+    measurement_13              NVARCHAR(MAX)   NULL,
+    voyage_flight_no_14         NVARCHAR(MAX)   NULL,
+    exported_to_15              NVARCHAR(MAX)   NULL,
     packages_16                 DECIMAL(10,2)   NULL,
-    awb_no_17a                  NVARCHAR(100)   NULL,
-    manifest_no_17b             NVARCHAR(100)   NULL,
-    port_of_loading_18          NVARCHAR(255)   NULL,
-    marks_numbers_19            NVARCHAR(255)   NULL,
-    port_of_discharge_20        NVARCHAR(255)   NULL,
-    destination_21              NVARCHAR(255)   NULL,
+    awb_no_17a                  NVARCHAR(MAX)   NULL,
+    manifest_no_17b             NVARCHAR(MAX)   NULL,
+    port_of_loading_18          NVARCHAR(MAX)   NULL,
+    marks_numbers_19            NVARCHAR(MAX)   NULL,
+    port_of_discharge_20        NVARCHAR(MAX)   NULL,
+    destination_21              NVARCHAR(MAX)   NULL,
 
     -- Agents & codes
-    clearing_agent_38           NVARCHAR(512)   NULL,
-    licence_no_39               NVARCHAR(255)   NULL,
-    unified_customs_code_43     NVARCHAR(100)   NULL,
-    gcc_aeo_code_44             NVARCHAR(100)   NULL,
+    clearing_agent_38           NVARCHAR(MAX)   NULL,
+    licence_no_39               NVARCHAR(MAX)   NULL,
+    unified_customs_code_43     NVARCHAR(MAX)   NULL,
+    gcc_aeo_code_44             NVARCHAR(MAX)   NULL,
     other_remarks_45            NVARCHAR(MAX)   NULL,
-    exit_port_46                NVARCHAR(255)   NULL,
+    exit_port_46                NVARCHAR(MAX)   NULL,
 
     -- Duties & fees
     total_duty_48               DECIMAL(12,2)   NULL,
@@ -76,13 +76,13 @@ CREATE TABLE boe_header (
     insured_52                  DECIMAL(12,2)   NULL,
 
     -- Payment info
-    payment_method_53           NVARCHAR(255)   NULL,
-    payment_no_54               NVARCHAR(100)   NULL,
-    payment_date_55             NVARCHAR(50)    NULL,
-    payment_bank_56             NVARCHAR(255)   NULL,
-    receipt_no_57               NVARCHAR(100)   NULL,
-    receipt_date_58             NVARCHAR(50)    NULL,
-    receipt_bank_59             NVARCHAR(255)   NULL,
+    payment_method_53           NVARCHAR(MAX)   NULL,
+    payment_no_54               NVARCHAR(MAX)   NULL,
+    payment_date_55             NVARCHAR(MAX)    NULL,
+    payment_bank_56             NVARCHAR(MAX)   NULL,
+    receipt_no_57               NVARCHAR(MAX)   NULL,
+    receipt_date_58             NVARCHAR(MAX)    NULL,
+    receipt_bank_59             NVARCHAR(MAX)   NULL,
 
     -- Audit
     created_at                  DATETIME        DEFAULT GETDATE(),
@@ -106,35 +106,35 @@ CREATE TABLE boe_line_items (
     item_no                             TINYINT             NOT NULL,
 
     -- Tariff & description
-    hs_code_22                          NVARCHAR(20)        NULL,
+    hs_code_22                          NVARCHAR(MAX)        NULL,
     goods_description_23                NVARCHAR(MAX)       NULL,
-    origin_24                           NVARCHAR(5)         NULL,
+    origin_24                           NVARCHAR(MAX)         NULL,
 
     -- Value
     foreign_value_25                    DECIMAL(15,2)       NULL,
-    currency_type_26                    NVARCHAR(10)        NULL,
+    currency_type_26                    NVARCHAR(MAX)        NULL,
     currency_value_27                   DECIMAL(12,6)       NULL,
     cif_local_value_28                  DECIMAL(15,2)       NULL,
 
     -- Duty
     d_rate_29                           DECIMAL(7,4)        NULL,
-    income_type_30                      NVARCHAR(100)       NULL,
+    income_type_30                      NVARCHAR(MAX)       NULL,
     total_duty_31                       DECIMAL(12,2)       NULL,
 
     -- Package & weight
     pkg_qty_32                          DECIMAL(10,2)       NULL,
-    pkg_type_33                         NVARCHAR(100)       NULL,
+    pkg_type_33                         NVARCHAR(MAX)       NULL,
     item_qty_34                         DECIMAL(10,2)       NULL,
-    item_unit_35                        NVARCHAR(100)       NULL,
+    item_unit_35                        NVARCHAR(MAX)       NULL,
     net_weight_36                       DECIMAL(12,3)       NULL,
     gross_weight_37                     DECIMAL(12,3)       NULL,
-    aip_no_37a                          NVARCHAR(100)       NULL,
+    aip_no_37a                          NVARCHAR(MAX)       NULL,
     aip_duty_37b                        DECIMAL(12,2)       NULL,
 
     -- Customs restrictions
-    customs_restrictions_agency_40      NVARCHAR(255)       NULL,
-    customs_release_ref_41              NVARCHAR(255)       NULL,
-    exemption_code_42                   NVARCHAR(50)        NULL,
+    customs_restrictions_agency_40      NVARCHAR(MAX)       NULL,
+    customs_release_ref_41              NVARCHAR(MAX)       NULL,
+    exemption_code_42                   NVARCHAR(MAX)        NULL,
 
     -- Audit
     created_at                          DATETIME            DEFAULT GETDATE(),

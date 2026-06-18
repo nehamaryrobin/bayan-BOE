@@ -399,10 +399,27 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
     data["GCC_AEO_CODE_44"] = (aeo_val)
         
     lic_lbl = _find_line(lines1, 'LICENCE NO', '39')
-    licence_num = next((_get(lines1, lic_lbl + i) for i in range(1, 6) if lic_lbl + i < limit and re.match(r'^\d{4}$', _get(lines1, lic_lbl + i))), None)
-    licence_arabic = next((_get(lines1, lic_lbl + i) for i in range(1, 6) if lic_lbl + i < limit and re.search(_AR, _get(lines1, lic_lbl + i)) and not re.match(r'^\d', _get(lines1, lic_lbl + i))), None)
-    
-    data["LICENCE_NO_39"] = (f"{(licence_arabic)} {licence_num}") if licence_arabic and licence_num else licence_num
+    licence_num = None
+    licence_idx = -1
+    for i in range(1, 6):
+        idx = lic_lbl + i
+        if idx < limit:
+            val = _get(lines1, idx)
+            if re.match(r'^\d{4}$', val):
+                licence_num = val
+                licence_idx = idx
+                break
+
+    licence_text = None
+    if licence_idx > lic_lbl:
+        above_val = _get(lines1, licence_idx - 1)
+        if "LICENCE NO" not in above_val and not re.match(r'^\d{7}$', above_val):
+            licence_text = clean(above_val)
+
+    if licence_text and licence_num:
+        data["LICENCE_NO_39"] = f"{licence_text} {licence_num}"
+    else:
+        data["LICENCE_NO_39"] = licence_num
    
 
     # ── Field 45: OTHER_REMARKS ───────────────────────────────────────────────
