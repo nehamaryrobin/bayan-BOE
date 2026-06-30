@@ -1,11 +1,11 @@
 """
 pdf_to_text.py
-Extracts raw text from each page of a BOE PDF using pdfplumber.
-Returns a list of page strings (one per page).
+Extracts raw text and word-level coordinates from a BOE PDF.
+Uses PyMuPDF (fitz) for logical text flow, and pdfplumber for coordinate/layout-preserved extraction.
 """
 
-import pdfplumber
 import fitz
+import pdfplumber
 from app.logger import get_logger
 
 logger = get_logger("pdf_to_text")
@@ -14,26 +14,28 @@ logger = get_logger("pdf_to_text")
 class NonNativePdfError(Exception):
     """Raised when a PDF appears to be image/scanned instead of native text-based."""
 
+
 def extract_pages(pdf_path: str) -> list[str]:
     """
-    Open the PDF and return a list of raw text strings, one per page.
+    Open the PDF using PyMuPDF (fitz) and return a list of raw text strings, one per page.
+    This preserves the correct logical reading order for bidirectional text.
 
     Raises:
         NonNativePdfError: if the file appears to be a scanned/image PDF
                            instead of a native text PDF.
     """
     pages = []
-    with pdfplumber.open(pdf_path) as pdf:
-        if not pdf.pages:
+    with fitz.open(pdf_path) as doc:
+        if len(doc) == 0:
             raise ValueError("PDF contains no pages")
 
-        for i, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text(layout=True, x_tolerance=3, y_tolerance=3)
-            has_images = bool(getattr(page, "images", None))
+        for i, page in enumerate(doc, start=1):
+            text = page.get_text("text")
+            has_images = bool(page.get_images())
 
             if text and text.strip():
                 pages.append(text)
-                logger.debug(f"Page {i}: extracted {len(text)} characters")
+                logger.debug(f"Page {i}: extracted {len(text)} characters using PyMuPDF")
                 continue
 
             if has_images:
@@ -42,15 +44,36 @@ def extract_pages(pdf_path: str) -> list[str]:
                     "no selectable text could be extracted"
                 )
 
-            logger.debug(f"Page {i}: no text extracted")
+            logger.debug(f"Page {i}: no text extracted using PyMuPDF")
             pages.append("")
     return pages
 
 
-def extract_pages2(pdf_path: str) -> list[str]:
+def extract_words_with_coords(pdf_path: str) -> list[list[dict]]:
+    """
+    Return words with their bounding-box coordinates for each page using pdfplumber.
+    This preserves character grouping for RTL text.
+    Each word dict has: text, x0, top, x1, bottom, page_no
+    """
+    all_pages = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages, start=1):
+            words = page.extract_words(
+                x_tolerance=3,
+                y_tolerance=3,
+                keep_blank_chars=False,
+                use_text_flow=True,
+            )
+            for w in words:
+                w["page_no"] = i
+            all_pages.append(words)
+    return all_pages
+
+
+def extract_pages_layout(pdf_path: str) -> list[str]:
     """
     Open the PDF and return a list of raw text strings, one per page,
-    reconstructed by sorting words by visual layout coordinates.
+    reconstructed by sorting words by visual layout coordinates using pdfplumber.
     Wide visual gaps (greater than 15 points) are padded with multiple spaces.
     """
     pages = []
@@ -99,63 +122,6 @@ def extract_pages2(pdf_path: str) -> list[str]:
                 lines.append("".join(line_parts).strip())
 
             pages.append("\n".join(lines))
-            logger.debug(f"Page {i}: reconstructed text using coordinates")
+            logger.debug(f"Page {i}: reconstructed layout text using pdfplumber")
 
     return pages
-
-
-def extract_pages3(pdf_path: str) -> list[str]:
-    """
-    Open the PDF using PyMuPDF (fitz) and return a list of raw text strings, one per page.
-    This preserves the correct logical reading order for bidirectional text.
-
-    Raises:
-        NonNativePdfError: if the file appears to be a scanned/image PDF
-                           instead of a native text PDF.
-    """
-    pages = []
-    with fitz.open(pdf_path) as doc:
-        if len(doc) == 0:
-            raise ValueError("PDF contains no pages")
-
-        for i, page in enumerate(doc, start=1):
-            text = page.get_text("text")
-            has_images = bool(page.get_images())
-
-            if text and text.strip():
-                pages.append(text)
-                logger.debug(f"Page {i}: extracted {len(text)} characters using PyMuPDF")
-                continue
-
-            if has_images:
-                raise NonNativePdfError(
-                    f"PDF appears to be image/scanned (non-native) on page {i}: "
-                    "no selectable text could be extracted"
-                )
-
-            logger.debug(f"Page {i}: no text extracted using PyMuPDF")
-            pages.append("")
-    return pages
-
-
-
-def extract_words_with_coords(pdf_path: str) -> list[list[dict]]:
-    """
-    Return words with their bounding-box coordinates for each page.
-    Used by extractors that need positional parsing (e.g. line items).
-    Each word dict has: text, x0, top, x1, bottom, page_no
-    """
-    all_pages = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for i, page in enumerate(pdf.pages, start=1):
-            words = page.extract_words(
-                x_tolerance=3,
-                y_tolerance=3,
-                keep_blank_chars=False,
-                use_text_flow=True,
-            )
-            for w in words:
-                w["page_no"] = i
-            all_pages.append(words)
-    return all_pages
-

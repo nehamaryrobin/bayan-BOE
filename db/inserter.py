@@ -105,32 +105,22 @@ def _normalize_header_params(header: dict) -> dict:
     return params
 
 
-def insert_boe(conn, header: dict, line_items: list[dict]) -> None:
+def insert_boe(conn, header, line_items) -> None:
     """
-    Insert header + all line items in a single transaction.
-    Raises on any error — caller handles rollback.
+    Insert header + all line items.
+    Does not commit or rollback — transaction management is handled by the caller/context.
     """
+    header_dict = header.to_dict() if hasattr(header, "to_dict") else dict(header)
+    line_dicts = [item.to_dict() if hasattr(item, "to_dict") else dict(item) for item in line_items]
+
     cursor = conn.cursor()
     try:
-        params = _normalize_header_params(header)
+        params = _normalize_header_params(header_dict)
         cursor.execute(_INSERT_HEADER, params)
-        logger.debug(f"Header inserted: dec_no={header['DEC_NO']}")
+        logger.debug(f"Header inserted: dec_no={header_dict['DEC_NO']}")
 
-        for item in line_items:
+        for item in line_dicts:
             cursor.execute(_INSERT_LINE_ITEM, item)
         logger.debug(f"{len(line_items)} line items inserted")
-
-        conn.commit()
-        logger.info(
-            f"COMMIT OK | dec_no='{header['DEC_NO']}' | "
-            f"file='{header['PDF_FILENAME']}' | items={len(line_items)}"
-        )
-    except Exception as e:
-        conn.rollback()
-        logger.error(
-            f"ROLLBACK | dec_no='{header.get('DEC_NO')}' | "
-            f"file='{header.get('PDF_FILENAME')}' | error={e}"
-        )
-        raise
     finally:
         cursor.close()

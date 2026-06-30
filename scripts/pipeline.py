@@ -16,7 +16,7 @@ from app.logger import get_logger
 from extractors.pdf_to_text import NonNativePdfError, extract_pages
 from extractors.header_item_extraction import extract_header
 from extractors.line_item_extraction import extract_tabular_groups
-from db.connection import get_connection
+from db.connection import transaction_context
 from db.inserter import insert_boe, is_duplicate
 from utils.file_utils import move_to_processed, move_to_failed
 import watchdog
@@ -32,7 +32,6 @@ def process_file(pdf_path: str) -> bool:
     filename = os.path.splitext(os.path.basename(pdf_path))[0]
     logger.info(f"START | file='{filename}'")
 
-    conn = None
     try:
         # ── Step 1: Extract raw text ──────────────────────────────────────────
         pages = extract_pages(pdf_path)
@@ -46,18 +45,17 @@ def process_file(pdf_path: str) -> bool:
         # ── Step 3: Parse line items ──────────────────────────────────────────
         line_items = extract_tabular_groups(pdf_path, filename, dec_no)
 
-        # ── Step 4: Duplicate check ───────────────────────────────────────────
-        conn = get_connection()
-        if is_duplicate(conn, dec_no, filename):
-            logger.warning(
-                f"SKIP_DUPLICATE | file='{filename}' | dec_no='{dec_no}'"
-            )
-            conn.close()
-            move_to_processed(pdf_path)
-            return False
+        # ── Step 4: Database Transaction (Duplicate Check & Insertion) ────────
+        with transaction_context() as conn:
+            if is_duplicate(conn, dec_no, filename):
+                logger.warning(
+                    f"SKIP_DUPLICATE | file='{filename}' | dec_no='{dec_no}'"
+                )
+                move_to_processed(pdf_path)
+                return False
 
-        # ── Step 5: Insert into DB (single transaction) ───────────────────────
-        insert_boe(conn, header, line_items)
+            # ── Step 5: Insert into DB ─────────────────────────────────────────
+            insert_boe(conn, header, line_items)
 
         # ── Step 6: Move to processed ─────────────────────────────────────────
         move_to_processed(pdf_path)
@@ -72,10 +70,6 @@ def process_file(pdf_path: str) -> bool:
         logger.error(f"FAILED | file='{filename}' | error={e}")
         move_to_failed(pdf_path)
         return False
-
-    finally:
-        if conn:
-            conn.close()
 
 
 def main() -> int:

@@ -4,6 +4,7 @@ SQL Server connection using pymssql.
 Unicode/NVARCHAR handled natively by SQL Server.
 """
 import pymssql
+from contextlib import contextmanager
 from app.config import DB_CONFIG
 from app.logger import get_logger
 
@@ -28,3 +29,21 @@ def get_connection():
     except Exception as e:
         logger.error(f"DB connection failed: {e}")
         raise
+
+@contextmanager
+def transaction_context():
+    """
+    Context manager for database connections.
+    Automatically commits on success or rolls back on exception,
+    ensuring that the connection is always closed.
+    """
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Transaction failed and rolled back: {e}")
+        raise
+    finally:
+        conn.close()
