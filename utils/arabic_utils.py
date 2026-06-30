@@ -32,14 +32,14 @@ def clean(value) -> str | None:
     return fix_arabic(text)
 
 
-def clean_number(value) -> float | None:
+def clean_number(value) -> str | None:
     if value is None:
         return None
-    text = str(value).strip().replace(",", "")
-    text = re.sub(r'[^\d.-]', '', text)
+    text = str(value).strip()
     if not text:
         return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
+    text = text.replace(',', '')
+    match = re.search(r'-?\d+(?:\.\d+)?', text)
+    if match:
+        return match.group(0)
+    return None

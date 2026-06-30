@@ -1,7 +1,7 @@
 from extractors.pdf_to_text import extract_words_with_coords
 import re
 from app.logger import get_logger
-from utils.arabic_utils import clean, clean_number
+from utils.arabic_utils import clean, clean_number, fix_arabic
 
 logger = get_logger("line_item_extraction")
 
@@ -88,7 +88,7 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
         current_row = [sorted_words[0]]
         
         for w in sorted_words[1:]:
-            if abs(w["top"] - current_row[0]["top"]) <= 9: # Y-Tolerance
+            if abs(w["top"] - current_row[0]["top"]) <= 5: # Y-Tolerance
                 current_row.append(w)
             else:
                 row_groups.append(current_row)
@@ -134,25 +134,34 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
             prev_i = pt1_indices[my_pos - 1] if my_pos > 0 else -1
             next_i = pt1_indices[my_pos + 1] if my_pos < len(pt1_indices) - 1 else len(all_rows)
 
-            # Establish halfway midpoints
-            up_limit = (i + prev_i) // 2
-            down_limit = (i + next_i) // 2
+            # Split the rows between adjacent PT1 rows into non-overlapping halves.
+            # Upper half  [prev_i+1 … ceil_mid] → this item's UP scan
+            # Lower half  [i+1     … next_i-1]  → this item's DOWN scan
+            # Ceiling division ensures the exact midpoint row goes to UP scan
+            # (i.e. to the LOWER / current item), not the upper item's DOWN scan.
+            up_start  = i - 1
+            up_stop   = (i + prev_i + 1) // 2   # ceiling: row at ceil_mid belongs to UP scan
+            down_start = i + 1
+            down_stop  = (i + next_i + 1) // 2  # same ceiling: stops before next item's up_stop
 
-            # 1. Scan UP to the midpoint
+            # 1. Scan UP (from just above this PT1 row down to the ceiling midpoint)
             up_texts = []
-            for j in range(i - 1, up_limit, -1):
+            for j in range(up_start, up_stop - 1, -1):
                 if not _is_stray_text(all_rows[j]): break
                 up_texts.insert(0, all_rows[j])
 
-            # 2. Scan DOWN to the midpoint
+            # 2. Scan DOWN (from just below this PT1 row up to the floor midpoint)
             down_texts = []
-            for j in range(i + 1, down_limit + 1):
+            for j in range(down_start, down_stop):
                 if not _is_stray_text(all_rows[j]): break
                 down_texts.append(all_rows[j])
 
-            # 3. Merge and Clean the strings together
+            # 3. Merge and Clean the strings together.
+            # Apply fix_arabic() to each fragment individually so BiDi reordering
+            # only affects the description text, NOT the full PT1 row (which would
+            # break the regex by reversing the financial-data token order).
             raw_frags = up_texts + [data['description']] + down_texts
-            final_desc = " ".join(filter(None, (_clean_desc_fragment(f) for f in raw_frags)))
+            final_desc = " ".join(filter(None, (_clean_desc_fragment(fix_arabic(f)) for f in raw_frags)))
             # --------------------------------------
 
             row.update({

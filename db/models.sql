@@ -35,10 +35,10 @@ CREATE TABLE boe_header (
     delivery_order_no_5         NVARCHAR(MAX)   NULL,
     importer_exporter_6         NVARCHAR(MAX)   NULL,
     unload_date_7a              NVARCHAR(MAX)    NULL,
-    net_weight_7b               DECIMAL(12,3)   NULL,
+    net_weight_7b               NVARCHAR(50)   NULL,
     carrier_captain_driver_8    NVARCHAR(MAX)   NULL,
     intercessor_co_9            NVARCHAR(MAX)   NULL,
-    gross_weight_10             DECIMAL(12,3)   NULL,
+    gross_weight_10             NVARCHAR(50)   NULL,
     carrier_name_11             NVARCHAR(MAX)   NULL,
 
     -- Registration & tax
@@ -49,7 +49,7 @@ CREATE TABLE boe_header (
     measurement_13              NVARCHAR(MAX)   NULL,
     voyage_flight_no_14         NVARCHAR(MAX)   NULL,
     exported_to_15              NVARCHAR(MAX)   NULL,
-    packages_16                 DECIMAL(10,2)   NULL,
+    packages_16                 NVARCHAR(50)   NULL,
     awb_no_17a                  NVARCHAR(MAX)   NULL,
     manifest_no_17b             NVARCHAR(MAX)   NULL,
     port_of_loading_18          NVARCHAR(MAX)   NULL,
@@ -66,14 +66,14 @@ CREATE TABLE boe_header (
     exit_port_46                NVARCHAR(MAX)   NULL,
 
     -- Duties & fees
-    total_duty_48               DECIMAL(12,2)   NULL,
-    vat_48a                     DECIMAL(12,2)   NULL,
-    excise_tax_48b              DECIMAL(12,2)   NULL,
-    anti_dumping_48c            DECIMAL(12,2)   NULL,
-    handling_49                 DECIMAL(12,2)   NULL,
-    other_charges_50            DECIMAL(12,2)   NULL,
-    definite_51                 DECIMAL(12,2)   NULL,
-    insured_52                  DECIMAL(12,2)   NULL,
+    total_duty_48               NVARCHAR(50)   NULL,
+    vat_48a                     NVARCHAR(50)   NULL,
+    excise_tax_48b              NVARCHAR(50)   NULL,
+    anti_dumping_48c            NVARCHAR(50)   NULL,
+    handling_49                 NVARCHAR(50)   NULL,
+    other_charges_50            NVARCHAR(50)   NULL,
+    definite_51                 NVARCHAR(50)   NULL,
+    insured_52                  NVARCHAR(50)   NULL,
 
     -- Payment info
     payment_method_53           NVARCHAR(MAX)   NULL,
@@ -111,25 +111,25 @@ CREATE TABLE boe_line_items (
     origin_24                           NVARCHAR(MAX)         NULL,
 
     -- Value
-    foreign_value_25                    DECIMAL(15,2)       NULL,
+    foreign_value_25                    NVARCHAR(50)       NULL,
     currency_type_26                    NVARCHAR(MAX)        NULL,
-    currency_value_27                   DECIMAL(12,6)       NULL,
-    cif_local_value_28                  DECIMAL(15,2)       NULL,
+    currency_value_27                   NVARCHAR(50)       NULL,
+    cif_local_value_28                  NVARCHAR(50)       NULL,
 
     -- Duty
-    d_rate_29                           DECIMAL(7,4)        NULL,
+    d_rate_29                           NVARCHAR(50)        NULL,
     income_type_30                      NVARCHAR(MAX)       NULL,
-    total_duty_31                       DECIMAL(12,2)       NULL,
+    total_duty_31                       NVARCHAR(50)       NULL,
 
     -- Package & weight
-    pkg_qty_32                          DECIMAL(10,2)       NULL,
+    pkg_qty_32                          NVARCHAR(50)       NULL,
     pkg_type_33                         NVARCHAR(MAX)       NULL,
-    item_qty_34                         DECIMAL(10,2)       NULL,
+    item_qty_34                         NVARCHAR(50)       NULL,
     item_unit_35                        NVARCHAR(MAX)       NULL,
-    net_weight_36                       DECIMAL(12,3)       NULL,
-    gross_weight_37                     DECIMAL(12,3)       NULL,
+    net_weight_36                       NVARCHAR(50)       NULL,
+    gross_weight_37                     NVARCHAR(50)       NULL,
     aip_no_37a                          NVARCHAR(MAX)       NULL,
-    aip_duty_37b                        DECIMAL(12,2)       NULL,
+    aip_duty_37b                        NVARCHAR(50)       NULL,
 
     -- Customs restrictions
     customs_restrictions_agency_40      NVARCHAR(MAX)       NULL,
