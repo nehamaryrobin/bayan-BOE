@@ -74,6 +74,8 @@ def _clean_desc_fragment(t: str) -> str:
 def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[dict]:
     pages_words = extract_words_with_coords(pdf_path)
     all_rows = []
+    all_tops = []
+    all_pages = []
 
     # ── 1. Build clean horizontal text rows ──────────────────────────────────
     for page_no, words in enumerate(pages_words, start=1):
@@ -99,14 +101,17 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
             row_str = " ".join(w["text"] for w in sorted(row, key=lambda w: w["x0"])).strip()
             if row_str:
                 all_rows.append(row_str)
+                all_tops.append(sum(w["top"] for w in row) / len(row))
+                all_pages.append(page_no)
 
     # ── 1.5. Noise Removal ────────────────────────────
     # Remove noise rows before checking for line items.
     # Note: We do not merge standalone 1-2 digit rows (like page numbers or empty table row indices)
     # to avoid bleeding them into description text of the preceding line item.
-    all_rows = [r for r in all_rows if not _BORDER_NOISE_RE.match(r)]
-
-
+    valid_indices = [i for i, r in enumerate(all_rows) if not _BORDER_NOISE_RE.match(r)]
+    all_rows = [all_rows[i] for i in valid_indices]
+    all_tops = [all_tops[i] for i in valid_indices]
+    all_pages = [all_pages[i] for i in valid_indices]
 
     # ── Pre-calculate PT1 indices to establish safe boundaries ───────────────
     pt1_indices = [idx for idx, r in enumerate(all_rows) if _LINE_ITEM_PT1_RE.match(r)]
@@ -129,27 +134,33 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
             prev_i = pt1_indices[my_pos - 1] if my_pos > 0 else -1
             next_i = pt1_indices[my_pos + 1] if my_pos < len(pt1_indices) - 1 else len(all_rows)
 
-            # Split the rows between adjacent PT1 rows into non-overlapping halves.
-            # Upper half  [prev_i+1 … ceil_mid] → this item's UP scan
-            # Lower half  [i+1     … next_i-1]  → this item's DOWN scan
-            # Ceiling division ensures the exact midpoint row goes to UP scan
-            # (i.e. to the LOWER / current item), not the upper item's DOWN scan.
-            up_start  = i - 1
-            up_stop   = (i + prev_i + 1) // 2   # ceiling: row at ceil_mid belongs to UP scan
-            down_start = i + 1
-            down_stop  = (i + next_i + 1) // 2  # same ceiling: stops before next item's up_stop
-
-            # 1. Scan UP (from just above this PT1 row down to the ceiling midpoint)
+            # 1. Scan UP (assign if closer to this PT1 row than to prev PT1 row)
             up_texts = []
-            for j in range(up_start, up_stop - 1, -1):
-                if not _is_stray_text(all_rows[j]): break
-                up_texts.insert(0, all_rows[j])
+            for j in range(i - 1, prev_i, -1):
+                if _is_stray_text(all_rows[j]):
+                    dist_to_me = abs(all_tops[j] - all_tops[i])
+                    dist_to_prev = abs(all_tops[j] - all_tops[prev_i]) if (prev_i != -1 and all_pages[j] == all_pages[prev_i]) else float('inf')
+                    
+                    if dist_to_me <= dist_to_prev:
+                        up_texts.insert(0, all_rows[j])
+                    else:
+                        break # Hit a row that belongs to the previous item
+                else:
+                    break
 
-            # 2. Scan DOWN (from just below this PT1 row up to the floor midpoint)
+            # 2. Scan DOWN (assign if closer to this PT1 row than to next PT1 row)
             down_texts = []
-            for j in range(down_start, down_stop):
-                if not _is_stray_text(all_rows[j]): break
-                down_texts.append(all_rows[j])
+            for j in range(i + 1, next_i):
+                if _is_stray_text(all_rows[j]):
+                    dist_to_me = abs(all_tops[j] - all_tops[i])
+                    dist_to_next = abs(all_tops[j] - all_tops[next_i]) if (next_i != len(all_rows) and all_pages[j] == all_pages[next_i]) else float('inf')
+                    
+                    if dist_to_me <= dist_to_next:
+                        down_texts.append(all_rows[j])
+                    else:
+                        break # Hit a row that belongs to the next item
+                else:
+                    break
 
             # 3. Merge and Clean the strings together.
             # Apply fix_arabic() to each fragment individually so BiDi reordering
