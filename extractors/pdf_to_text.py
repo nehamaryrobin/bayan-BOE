@@ -5,6 +5,7 @@ Returns a list of page strings (one per page).
 """
 
 import pdfplumber
+import fitz
 from app.logger import get_logger
 
 logger = get_logger("pdf_to_text")
@@ -101,6 +102,41 @@ def extract_pages2(pdf_path: str) -> list[str]:
             logger.debug(f"Page {i}: reconstructed text using coordinates")
 
     return pages
+
+
+def extract_pages3(pdf_path: str) -> list[str]:
+    """
+    Open the PDF using PyMuPDF (fitz) and return a list of raw text strings, one per page.
+    This preserves the correct logical reading order for bidirectional text.
+
+    Raises:
+        NonNativePdfError: if the file appears to be a scanned/image PDF
+                           instead of a native text PDF.
+    """
+    pages = []
+    with fitz.open(pdf_path) as doc:
+        if len(doc) == 0:
+            raise ValueError("PDF contains no pages")
+
+        for i, page in enumerate(doc, start=1):
+            text = page.get_text("text")
+            has_images = bool(page.get_images())
+
+            if text and text.strip():
+                pages.append(text)
+                logger.debug(f"Page {i}: extracted {len(text)} characters using PyMuPDF")
+                continue
+
+            if has_images:
+                raise NonNativePdfError(
+                    f"PDF appears to be image/scanned (non-native) on page {i}: "
+                    "no selectable text could be extracted"
+                )
+
+            logger.debug(f"Page {i}: no text extracted using PyMuPDF")
+            pages.append("")
+    return pages
+
 
 
 def extract_words_with_coords(pdf_path: str) -> list[list[dict]]:

@@ -100,17 +100,12 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
             if row_str:
                 all_rows.append(row_str)
 
-    # ── 1.5. Orphan Number Merger & Noise Removal ────────────────────────────
-    # Remove noise rows before checking for line items
+    # ── 1.5. Noise Removal ────────────────────────────
+    # Remove noise rows before checking for line items.
+    # Note: We do not merge standalone 1-2 digit rows (like page numbers or empty table row indices)
+    # to avoid bleeding them into description text of the preceding line item.
     all_rows = [r for r in all_rows if not _BORDER_NOISE_RE.match(r)]
 
-    merged_rows = []
-    for row_str in all_rows:
-        if re.match(r'^\d{1,2}$', row_str) and merged_rows:
-            merged_rows[-1] += f" {row_str}"
-        else:
-            merged_rows.append(row_str)
-    all_rows = merged_rows
 
 
     # ── Pre-calculate PT1 indices to establish safe boundaries ───────────────
@@ -173,7 +168,7 @@ def extract_tabular_groups(pdf_path: str, filename: str, dec_no: str) -> list[di
                 "CURRENCY_TYPE_26": clean(data.get('currency_type')),
                 "FOREIGN_VALUE_25": clean_number(data.get('foreign_value')),
                 "ORIGIN_24": clean(data.get('origin_country')),
-                "GOODS_DESCRIPTION_23": clean(final_desc),
+                "GOODS_DESCRIPTION_23": final_desc.strip() if final_desc else None,
                 "HS_CODE_22": clean(data.get('hs_code'))
             })
             continue
