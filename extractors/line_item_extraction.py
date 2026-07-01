@@ -26,14 +26,15 @@ _LINE_ITEM_PT2_RE = re.compile(r"""
     (?:(?P<exemption_code>\d{1,12})\s+)?                              
     (?:(?P<aip_duty>[\d,]+\.\d+)\s+(?P<aip_no>\d+)\s+)?               
     (?P<gross_weight>[\d,]+\.\d+)\s+                                  
-    (?P<net_weight>[\d,]+\.\d+)\s+                                    
-    (?P<unit>[^\s\d]+)\s+      
+    (?P<net_weight>[\d,]+\.\d+)\s+                                     
+    (?P<unit>[^\s\d]+(?:\s+[\(\)\[\]/\\–\u0600-\u06FF\uFE70-\uFEFF]+?)*)\s+
     (?P<item_qty>[\d,]+\.00)\s+                                     
     (?:(?P<package_type>[^\s\d]+)\s+(?P<package_qty>[\d,]+\.00)\s+)?  
     (?:(?P<release_ref>\d{4,12})\s+(?P<agency>.+?)\s+)?               
     (?P<item_no>\d{1,2})                                              
     (?:\s+.*)?$   
 """, re.VERBOSE | re.DOTALL)
+
 
 def _is_stray_text(line: str) -> bool:
     """Returns True if the line is orphaned text (not a main row or header)."""

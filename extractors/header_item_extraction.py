@@ -69,11 +69,11 @@ _MEASUREMENT_ROW_RE = re.compile(r"""
 """, re.VERBOSE | re.IGNORECASE)
 
 _PACKAGES_ROW_RE = re.compile(r"""
-    ^\s*
-    (?P<no_of_packages>\d+)\s{3,}      # 1. MANDATORY: Number of Packages (Field 16)
-    (?P<tin_no>\b\d{10,15}\b)\s{3,}    # 2. MANDATORY: TIN Number (Field 12A) - Matches either standard 10-digit or 15-digit IDs
-    (?P<voyage_flight_no>\w+).         # 3. MANDATORY: Voyage / Flight Number (Field 14)
-    \s*$
+    ^ \s*
+    (?P<no_of_packages>\d+)\s{3,}               # 1. Number of Packages (Field 16)
+    (?P<tin_no>\b[A-Z0-9]{3,15}\b)\s{3,}       # 2. TIN Number (Field 12A) 
+    (?P<voyage_flight_no>\w+)                   # 3. Voyage / Flight Number (Field 14)
+    \s* $
 """, re.VERBOSE | re.IGNORECASE)
 
 
@@ -242,7 +242,7 @@ def extract_header(pdf_or_pages: str | list[str], filename: str) -> dict:
     data["PACKAGES_16"]         = clean_number(cols_14_16[0]) if len(cols_14_16) > 0 else None
     
     tin_val = clean(cols_14_16[1]) if len(cols_14_16) > 1 else None
-    if tin_val and not re.match(r'^\d+$', tin_val.replace(" ", "")):
+    if tin_val and not re.match(r'^[A-Za-z0-9]{3,15}$', tin_val.replace(" ", "")):
         data["TIN_NO_12A"] = None
     else:
         data["TIN_NO_12A"] = tin_val
